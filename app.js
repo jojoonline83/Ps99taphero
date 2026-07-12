@@ -126,15 +126,17 @@ function renderLeaderboard() {
 
     tbody.innerHTML = list.map((p, idx) => {
         const color = colorFor(p.UserID);
-        const d10 = playerDelta(p.UserID, p.Points, 10 * 60_000, 11 * 60_000);
-        const d30 = playerDelta(p.UserID, p.Points, 30 * 60_000, 8  * 60_000);
-        const d1h = playerDelta(p.UserID, p.Points, 60 * 60_000, 12 * 60_000);
+        const hasPoints = p.Points !== null && p.Points !== undefined;
+        const d10 = hasPoints ? playerDelta(p.UserID, p.Points, 10 * 60_000, 11 * 60_000) : { text: '—', color: '' };
+        const d30 = hasPoints ? playerDelta(p.UserID, p.Points, 30 * 60_000, 8  * 60_000) : { text: '—', color: '' };
+        const d1h = hasPoints ? playerDelta(p.UserID, p.Points, 60 * 60_000, 12 * 60_000) : { text: '—', color: '' };
+        const clickAttr = hasPoints ? `onclick="showPlayerDetail(${p.UserID})" style="cursor:pointer"` : '';
         return `
-      <tr onclick="showPlayerDetail(${p.UserID})" style="cursor:pointer">
+      <tr ${clickAttr}>
         <td class="player-rank">${idx + 1}</td>
         <td class="player-name"><span class="st-team-dot" style="background:${color}"></span> ${esc(p.DisplayName)}</td>
-        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.Group)}</td>
-        <td class="player-points" style="color:${color}">${fmt(p.Points)}</td>
+        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.Group || '—')}</td>
+        <td class="player-points" style="color:${color}">${hasPoints ? fmt(p.Points) : '—'}</td>
         <td style="color:${d10.color};font-size:12px">${d10.text}</td>
         <td style="color:${d30.color};font-size:12px">${d30.text}</td>
         <td style="color:${d1h.color};font-size:12px">${d1h.text}</td>
@@ -205,27 +207,60 @@ function renderPlayerDetail(userId) {
 }
 
 // ── Search ─────────────────────────────────
-function searchPlayers() {
+async function searchPlayers() {
     const input = document.getElementById('search-player-name');
-    const query = (input?.value || '').trim().toLowerCase();
+    const query = (input?.value || '').trim();
     if (!query) { toast('Enter a player name', 'error'); return; }
 
+    const btn = document.getElementById('search-player-btn');
     const setStatus = (msg, type = '') => {
         const el = document.getElementById('search-status');
         el.className = `import-status ${type}`;
-        el.innerHTML = msg;
+        el.innerHTML = type === 'loading' ? `<span class="spinner"></span>${msg}` : msg;
     };
 
-    const players = allPlayers();
-    const matches = players.filter(p =>
-        p.DisplayName.toLowerCase().includes(query) || String(p.UserID) === query
+    btn.disabled = true;
+    setStatus(`Searching for "${esc(query)}"…`, 'loading');
+
+    // First search locally in our snapshot data
+    const localPlayers = allPlayers();
+    const queryLower = query.toLowerCase();
+    const localMatches = localPlayers.filter(p =>
+        p.DisplayName.toLowerCase().includes(queryLower) || String(p.UserID) === query
     );
 
-    state.searchResults = matches;
+    // Also search via PS99 API for players not in our snapshot
+    let apiMatches = [];
+    if (query.length >= 2) {
+        try {
+            const res = await apiFetch(`/players/search?q=${encodeURIComponent(query)}&limit=25`);
+            const apiPlayers = res?.data || [];
+            const localUserIds = new Set(localMatches.map(p => p.UserID));
+            apiMatches = apiPlayers
+                .filter(p => !localUserIds.has(p.userId) && !localUserIds.has(Number(p.userId)))
+                .map(p => ({
+                    UserID: p.userId,
+                    DisplayName: p.displayName || p.username || String(p.userId),
+                    Points: null,
+                    Group: '—',
+                    fromApi: true,
+                }));
+        } catch (_) {}
+    }
+
+    const allMatches = [...localMatches, ...apiMatches];
+    state.searchResults = allMatches;
     state.mode = 'search';
     save();
     renderLeaderboard();
-    setStatus(matches.length ? `Found ${matches.length} player(s).` : `No players found matching "${esc(query)}".`, matches.length ? 'success' : 'error');
+
+    if (allMatches.length) {
+        const note = apiMatches.length ? ` (${localMatches.length} in leaderboard, ${apiMatches.length} from player search)` : '';
+        setStatus(`Found ${allMatches.length} player(s)${note}.`, 'success');
+    } else {
+        setStatus(`No players found matching "${esc(query)}".`, 'error');
+    }
+    btn.disabled = false;
 }
 
 function clearSearch() {
@@ -237,7 +272,10 @@ function clearSearch() {
 // ── Data loading ──────────────────────────
 async function loadHistory() {
     const res = await fetch(`history.json?t=${Date.now()}`, { signal: AbortSignal.timeout(30000) });
-    if (res.ok) historyData = await res.json();
+    if (res.ok) {
+        const raw = await res.json();
+        historyData = raw.filter(entry => Array.isArray(entry.players));
+    }
 }
 
 async function refreshAll({ silent = false } = {}) {
