@@ -125,33 +125,46 @@ const startedAt = Date.now();
 
 // 1. Get active clan battle info.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
-if (!battleInfo?.data) {
-    console.error('No active clan battle found — skipping this snapshot.');
-    process.exit(0);
-}
-console.log(`Active battle: ${JSON.stringify(battleInfo.data.configData?.Name || battleInfo.data.Name || 'unknown')}`);
+console.log(`Active battle response: ${JSON.stringify(battleInfo?.data ? Object.keys(battleInfo.data) : 'null')}`);
 
 // 2. Fetch top clans sorted by battle points.
 const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
 const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
     const json = await fetchJson(`${API_BASE}/v1/clans?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-    return json?.data || [];
+    if (!json?.data) return [];
+    // Handle both array and {clans: [...]} response formats
+    if (Array.isArray(json.data)) return json.data;
+    if (Array.isArray(json.data.clans)) return json.data.clans;
+    return [];
 });
 const clanSummaries = pageResults.flat();
 
 if (!clanSummaries.length) {
     console.error('No clan data returned — skipping this snapshot.');
+    // Log one raw response for debugging
+    const debugJson = await fetchJson(`${API_BASE}/v1/clans?page=1&pageSize=10&sort=Points&sortOrder=desc`);
+    console.log(`Debug /v1/clans response: ${JSON.stringify(debugJson).slice(0, 500)}`);
     process.exit(0);
 }
-console.log(`Fetched ${clanSummaries.length} clan summaries.`);
+console.log(`Fetched ${clanSummaries.length} clan summaries. First: ${JSON.stringify(clanSummaries[0]).slice(0, 200)}`);
 
 // 3. Fetch detail for each clan to get individual player battle contributions.
+let debuggedFirst = false;
 const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, async summary => {
     const name = summary.Name || summary.name;
     if (!name) return [];
     const detailJson = await fetchJson(`${API_BASE}/v1/clans/${encodeURIComponent(name)}`);
     const detail = detailJson?.data;
     if (!detail) return [];
+
+    if (!debuggedFirst) {
+        debuggedFirst = true;
+        const keys = Object.keys(detail);
+        console.log(`Clan detail keys: ${JSON.stringify(keys)}`);
+        console.log(`BattleContributions: ${JSON.stringify(detail.BattleContributions?.slice(0, 2))}`);
+        console.log(`PointContributions: ${JSON.stringify(detail.PointContributions?.slice(0, 2))}`);
+        console.log(`Battles: ${JSON.stringify(detail.Battles)?.slice(0, 300)}`);
+    }
 
     // Extract individual players with their battle points
     const battleContribs = {};
