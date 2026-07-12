@@ -166,7 +166,7 @@ const leagueDetails = await mapWithConcurrency(summaries, DETAIL_CONCURRENCY, as
             UserID: detail.Owner.UserID,
             DisplayName: detail.Owner.DisplayName,
             Points: contribByUser[detail.Owner.UserID] ?? 0,
-            League: detail.Name,
+            Group: detail.Name,
         });
     }
     (detail.Members || []).forEach(m => {
@@ -174,7 +174,7 @@ const leagueDetails = await mapWithConcurrency(summaries, DETAIL_CONCURRENCY, as
             UserID: m.UserID,
             DisplayName: m.DisplayName,
             Points: contribByUser[m.UserID] ?? 0,
-            League: detail.Name,
+            Group: detail.Name,
         });
     });
     return players;
@@ -273,7 +273,7 @@ for (const player of monitoredPlayers) {
         const key = `${player.UserID}:${w.label}`;
         const isStalled = player.Points - past === 0;
         if (isStalled && !alertState[key]) {
-            await sendDiscordAlert(`⚠️ **${player.DisplayName}** has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts, league: ${player.League}).`);
+            await sendDiscordAlert(`⚠️ **${player.DisplayName}** has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts, group: ${player.Group}).`);
             alertState[key] = true;
         } else if (!isStalled) {
             alertState[key] = false;
