@@ -14,6 +14,7 @@ const PALETTE = [
 
 let historyData = [];
 let state = { mode: 'top', searchResults: [], colorByUser: {}, nextColorIdx: 0 };
+const DISPLAY_LIMIT = 1000;
 
 function save() {
     try { localStorage.setItem('ps99_taphero_players_v1', JSON.stringify(state)); } catch (_) {}
@@ -45,7 +46,8 @@ function colorFor(userId) {
 
 function latestSnapshot() { return historyData.length ? historyData[historyData.length - 1] : null; }
 function allPlayers() { return latestSnapshot()?.players || []; }
-function displayedPlayers() { return state.mode === 'search' ? state.searchResults : allPlayers(); }
+function topPlayers() { return allPlayers().slice(0, DISPLAY_LIMIT); }
+function displayedPlayers() { return state.mode === 'search' ? state.searchResults : topPlayers(); }
 
 // ── Toast ────────────────────────────��─────
 let toastTimer = null;
@@ -112,7 +114,7 @@ function renderLeaderboard() {
     document.getElementById('leaderboard-heading').textContent =
         state.mode === 'search'
             ? `Search Results (${list.length} match${list.length === 1 ? '' : 'es'})`
-            : `Top Players (${allPlayers().length})`;
+            : `Top Players (${topPlayers().length})`;
 
     document.getElementById('clear-search-btn').style.display = state.mode === 'search' ? 'inline-block' : 'none';
 
@@ -229,34 +231,13 @@ async function searchPlayers() {
         p.DisplayName.toLowerCase().includes(queryLower) || String(p.UserID) === query
     );
 
-    // Also search via PS99 API for players not in our snapshot
-    let apiMatches = [];
-    if (query.length >= 2) {
-        try {
-            const res = await apiFetch(`/players/search?q=${encodeURIComponent(query)}&limit=25`);
-            const apiPlayers = res?.data || [];
-            const localUserIds = new Set(localMatches.map(p => p.UserID));
-            apiMatches = apiPlayers
-                .filter(p => !localUserIds.has(p.userId) && !localUserIds.has(Number(p.userId)))
-                .map(p => ({
-                    UserID: p.userId,
-                    DisplayName: p.displayName || p.username || String(p.userId),
-                    Points: null,
-                    Group: '—',
-                    fromApi: true,
-                }));
-        } catch (_) {}
-    }
-
-    const allMatches = [...localMatches, ...apiMatches];
-    state.searchResults = allMatches;
+    state.searchResults = localMatches;
     state.mode = 'search';
     save();
     renderLeaderboard();
 
-    if (allMatches.length) {
-        const note = apiMatches.length ? ` (${localMatches.length} in leaderboard, ${apiMatches.length} from player search)` : '';
-        setStatus(`Found ${allMatches.length} player(s)${note}.`, 'success');
+    if (localMatches.length) {
+        setStatus(`Found ${localMatches.length} player(s).`, 'success');
     } else {
         setStatus(`No players found matching "${esc(query)}".`, 'error');
     }

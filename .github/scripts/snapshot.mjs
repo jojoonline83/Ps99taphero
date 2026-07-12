@@ -8,7 +8,7 @@ const TOP_PAGES          = 5;
 const PAGE_SIZE          = 100;
 const LIST_CONCURRENCY   = 10;
 const DETAIL_CONCURRENCY = 20;
-const MAX_PLAYERS        = 1000;
+const MAX_PLAYERS        = 5000;
 
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = [];
