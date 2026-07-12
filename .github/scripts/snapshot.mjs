@@ -1,24 +1,24 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 
-const API_BASE       = 'https://ps99.biggamesapi.io/v1';
-const HISTORY_FILE   = 'history.json';
-const RETENTION_MS   = 95 * 60 * 1000; // ~95 minutes
-const TOP_PAGES      = 1;    // Tap Hero leaderboard — fetch top 100
-const PAGE_SIZE      = 100;
+const API_BASE           = 'https://ps99.biggamesapi.io/v1';
+const HISTORY_FILE       = 'history.json';
+const RESOLVED_CACHE_FILE = 'resolved_names.json';
+const RETENTION_MS       = 95 * 60 * 1000;
+const TOP_PAGES          = 5;    // 5 pages * 100 = Top 500 leagues
+const PAGE_SIZE          = 100;
+const LIST_CONCURRENCY   = 10;
+const DETAIL_CONCURRENCY = 20;
 
-// The competition category for the current Tap Hero event.
-// Update this if the competition ID changes each season/event.
-const COMPETITION_CATEGORY = 'TapBattle';
+// Leagues to always track even if they fall outside the Top 500.
+const EXTRA_LEAGUE_NAMES = [];
 
-// Players to monitor for inactivity — Discord alerts fire when any of
-// these players show zero point gain across the check windows.
-// Add Roblox UserIDs (as numbers) for the players you want monitored.
-const MONITORED_PLAYERS = [];
+// Leagues whose individual players are monitored for inactivity.
+// Discord alerts fire when a player shows zero point gain.
+const MONITOR_LEAGUE_NAMES = [];
 
-// Discord webhook URLs — comma-separated to broadcast to multiple channels.
-// Set via GitHub Actions secret: DISCORD_WEBHOOK_URL
 const MONITOR_DIR        = '.github/monitor-data';
-const MONITOR_STATE_FILE = `${MONITOR_DIR}/monitor_alert_state.json`;
+const MONITOR_HISTORY_FILE = `${MONITOR_DIR}/monitor_history.json`;
+const MONITOR_STATE_FILE   = `${MONITOR_DIR}/monitor_alert_state.json`;
 
 function webhookUrls() {
     return (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -36,6 +36,48 @@ async function fetchJson(url, attempts = 3) {
         if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
     }
     return null;
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+    const results = new Array(items.length);
+    let idx = 0;
+    async function worker() {
+        while (idx < items.length) {
+            const i = idx++;
+            results[i] = await fn(items[i], i);
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+function isUnresolvedName(entry) {
+    return entry.DisplayName === String(entry.UserID);
+}
+
+function buildLeagueFromDetail(detail, extra) {
+    const contribByUser = {};
+    (detail.PointContributions || []).forEach(c => { contribByUser[c.UserID] = c.Points; });
+
+    const roster = [];
+    if (detail.Owner && detail.Owner.UserID) {
+        roster.push({
+            UserID: detail.Owner.UserID, DisplayName: detail.Owner.DisplayName,
+            Points: contribByUser[detail.Owner.UserID] ?? 0, Role: 'Owner',
+        });
+    }
+    (detail.Members || []).forEach(m => {
+        roster.push({
+            UserID: m.UserID, DisplayName: m.DisplayName,
+            Points: contribByUser[m.UserID] ?? 0, Role: 'Member',
+        });
+    });
+
+    return {
+        ID: detail.ID, Name: detail.Name, Points: detail.Points,
+        Members: roster.length, MemberCapacity: detail.MemberCapacity,
+        roster, ...(extra ? { Extra: true } : {}),
+    };
 }
 
 async function sendDiscordAlert(message) {
@@ -61,6 +103,7 @@ async function sendDiscordAlert(message) {
 async function resolveUsernames(userIds) {
     const map = {};
     const ROBLOX_URL = 'https://users.roblox.com/v1/users';
+    let failedBatches = 0;
 
     for (let i = 0; i < userIds.length; i += 100) {
         const batch = userIds.slice(i, i + 100);
@@ -94,9 +137,11 @@ async function resolveUsernames(userIds) {
                 await new Promise(r => setTimeout(r, 500 * attempt));
             }
         }
-        if (!ok) console.log(`resolveUsernames: batch starting at index ${i} never succeeded.`);
+        if (!ok) failedBatches++;
         await new Promise(r => setTimeout(r, 500));
     }
+
+    if (failedBatches) console.log(`resolveUsernames: ${failedBatches} batch(es) never succeeded after retries.`);
     return map;
 }
 
@@ -109,85 +154,129 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
-// 1. Fetch the Tap Hero competition leaderboard.
-const players = [];
-for (let page = 1; page <= TOP_PAGES; page++) {
-    const json = await fetchJson(`${API_BASE}/leaderboard/${COMPETITION_CATEGORY}?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-    const entries = json?.data || [];
-    if (Array.isArray(entries)) {
-        entries.forEach((entry, idx) => {
-            players.push({
-                UserID: entry.UserID || entry.userId || entry.OwnerID,
-                DisplayName: entry.DisplayName || entry.displayName || String(entry.UserID || entry.userId || entry.OwnerID),
-                Points: entry.Points || entry.points || 0,
-                Rank: (page - 1) * PAGE_SIZE + idx + 1,
-            });
-        });
-    }
-}
+// 1. Fetch the Top 500 league summaries.
+const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
+const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
+    const json = await fetchJson(`${API_BASE}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+    return json?.data?.leagues || [];
+});
+const summaries = pageResults.flat();
 
-if (!players.length) {
-    console.error('No leaderboard data returned — skipping this snapshot.');
+if (!summaries.length) {
+    console.error('No league data returned — skipping this snapshot.');
     process.exit(0);
 }
 
-// 2. Resolve any numeric-fallback display names.
+// 1b. Fetch standing-exception leagues outside the Top 500.
+const trackedNamesLower = new Set(summaries.map(s => s.NameLower || s.Name.toLowerCase()));
+const extraLeagues = [];
+for (const extraName of EXTRA_LEAGUE_NAMES) {
+    if (trackedNamesLower.has(extraName.toLowerCase())) continue;
+    const detailJson = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(extraName)}`);
+    const detail = detailJson?.data;
+    if (!detail) {
+        console.log(`Extra tracked league "${extraName}" not found — skipping.`);
+        continue;
+    }
+    extraLeagues.push(buildLeagueFromDetail(detail, true));
+}
+
+function looksSuspicious(detail, summary) {
+    return typeof summary.Points === 'number' && summary.Points > 0 && detail.Points < summary.Points * 0.9;
+}
+
+// 2. Fetch full roster + point-contribution detail for every league.
+const rankedLeagues = await mapWithConcurrency(summaries, DETAIL_CONCURRENCY, async summary => {
+    const detailJson = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(summary.Name)}`);
+    let detail = detailJson?.data;
+
+    if (detail && looksSuspicious(detail, summary)) {
+        const retryJson = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(summary.Name)}`);
+        const retryDetail = retryJson?.data;
+        if (retryDetail && !looksSuspicious(retryDetail, summary)) {
+            detail = retryDetail;
+        } else {
+            console.log(`Suspicious detail for "${summary.Name}" (list: ${summary.Points}, detail: ${detail.Points}) — keeping list-level Points.`);
+            detail = null;
+        }
+    }
+
+    if (!detail) {
+        return {
+            ID: summary.ID, Name: summary.Name, Points: summary.Points,
+            Members: summary.Members, MemberCapacity: summary.MemberCapacity,
+            roster: [],
+        };
+    }
+
+    return buildLeagueFromDetail(detail, false);
+});
+const leagues = rankedLeagues.concat(extraLeagues);
+
+// 3. Resolve numeric-fallback display names.
 let resolvedCache = {};
-const RESOLVED_CACHE_FILE = 'resolved_names.json';
 if (existsSync(RESOLVED_CACHE_FILE)) {
     try { resolvedCache = JSON.parse(readFileSync(RESOLVED_CACHE_FILE, 'utf8')); } catch (_) { resolvedCache = {}; }
 }
 
-const needsResolve = [];
-for (const p of players) {
-    if (resolvedCache[p.UserID]) {
-        p.DisplayName = resolvedCache[p.UserID];
-    } else if (p.DisplayName === String(p.UserID)) {
-        needsResolve.push(p.UserID);
-    }
-}
+const needsResolve = new Set();
+leagues.forEach(l => l.roster.forEach(p => {
+    if (!isUnresolvedName(p)) return;
+    if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; return; }
+    needsResolve.add(p.UserID);
+}));
 
-if (needsResolve.length) {
-    const resolved = await resolveUsernames([...new Set(needsResolve)]);
-    for (const p of players) {
-        if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) {
-            p.DisplayName = resolved[p.UserID];
-        }
-    }
+if (needsResolve.size) {
+    const resolved = await resolveUsernames([...needsResolve]);
+    leagues.forEach(l => l.roster.forEach(p => {
+        if (isUnresolvedName(p) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
+    }));
     Object.assign(resolvedCache, resolved);
-    console.log(`Resolved ${Object.keys(resolved).length}/${needsResolve.length} display names (${Object.keys(resolvedCache).length} cached).`);
+    console.log(`Resolved ${Object.keys(resolved).length}/${needsResolve.size} display names (${Object.keys(resolvedCache).length} cached).`);
 }
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
-// 3. Append snapshot and prune history.
+// 4. Append snapshot and prune history.
 let history = [];
 if (existsSync(HISTORY_FILE)) {
     try { history = JSON.parse(readFileSync(HISTORY_FILE, 'utf8')); } catch (_) { history = []; }
 }
 
 const now = Date.now();
-history.push({ ts: now, players });
+history.push({ ts: now, leagues });
 history = history.filter(entry => now - entry.ts <= RETENTION_MS);
 writeFileSync(HISTORY_FILE, JSON.stringify(history));
 
 const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-console.log(`Snapshot recorded: ${players.length} players in ${elapsedSec}s, ${history.length} snapshots retained.`);
+console.log(`Snapshot recorded: ${leagues.length} leagues with roster detail in ${elapsedSec}s, ${history.length} snapshots retained.`);
 
-// 4. Inactivity monitoring — check if monitored players have gained 0 points.
+// 5. Player-level inactivity monitoring for MONITOR_LEAGUE_NAMES.
 mkdirSync(MONITOR_DIR, { recursive: true });
-
-let alertState = {};
-if (existsSync(MONITOR_STATE_FILE)) {
-    try { alertState = JSON.parse(readFileSync(MONITOR_STATE_FILE, 'utf8')); } catch (_) { alertState = {}; }
+const monitorLeagues = {};
+for (const name of MONITOR_LEAGUE_NAMES) {
+    const already = leagues.find(l => l.Name.toLowerCase() === name.toLowerCase());
+    if (already) {
+        monitorLeagues[name] = { roster: already.roster };
+        continue;
+    }
+    const json = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(name)}`);
+    const detail = json?.data;
+    monitorLeagues[name] = detail ? { roster: buildLeagueFromDetail(detail, false).roster } : null;
 }
 
-const pastHistory = history.filter(entry => entry.ts < now);
+let monitorHistory = [];
+if (existsSync(MONITOR_HISTORY_FILE)) {
+    try { monitorHistory = JSON.parse(readFileSync(MONITOR_HISTORY_FILE, 'utf8')); } catch (_) { monitorHistory = []; }
+}
+const pastMonitorHistory = monitorHistory.filter(entry => now - entry.ts <= RETENTION_MS);
+monitorHistory = [...pastMonitorHistory, { ts: now, leagues: monitorLeagues }];
+writeFileSync(MONITOR_HISTORY_FILE, JSON.stringify(monitorHistory));
 
-function findSnapshotNear(msAgo, toleranceMs) {
+function findMonitorSnapshotNear(msAgo, toleranceMs) {
     const targetTs = now - msAgo;
     const minAgeMs = msAgo / 2;
     let best = null, bestDiff = Infinity;
-    for (const entry of pastHistory) {
+    for (const entry of pastMonitorHistory) {
         if (now - entry.ts < minAgeMs) continue;
         const diff = Math.abs(entry.ts - targetTs);
         if (diff < bestDiff) { bestDiff = diff; best = entry; }
@@ -195,43 +284,41 @@ function findSnapshotNear(msAgo, toleranceMs) {
     return best && bestDiff <= toleranceMs ? best : null;
 }
 
-function findPlayerInSnapshot(snap, userId) {
-    return snap?.players?.find(p => p.UserID === userId);
+let alertState = {};
+if (existsSync(MONITOR_STATE_FILE)) {
+    try { alertState = JSON.parse(readFileSync(MONITOR_STATE_FILE, 'utf8')); } catch (_) { alertState = {}; }
 }
 
-const snap10 = findSnapshotNear(10 * 60_000, 11 * 60_000);
-const snap30 = findSnapshotNear(30 * 60_000, 8  * 60_000);
-const snap1h = findSnapshotNear(60 * 60_000, 12 * 60_000);
+const snap10 = findMonitorSnapshotNear(10 * 60_000, 11 * 60_000);
+const snap30 = findMonitorSnapshotNear(30 * 60_000, 8  * 60_000);
+const snap1h = findMonitorSnapshotNear(60 * 60_000, 12 * 60_000);
 
-// Check ALL players in the leaderboard for inactivity (not just MONITORED_PLAYERS).
-// If MONITORED_PLAYERS is non-empty, only those are checked; otherwise check everyone.
-const playersToCheck = MONITORED_PLAYERS.length
-    ? players.filter(p => MONITORED_PLAYERS.includes(p.UserID))
-    : players;
+for (const name of MONITOR_LEAGUE_NAMES) {
+    const currentRoster = monitorLeagues[name]?.roster;
+    if (!currentRoster) continue;
 
-for (const player of playersToCheck) {
-    const windows = [
-        { label: '10m', snap: snap10 },
-        { label: '30m', snap: snap30 },
-        { label: '1h',  snap: snap1h },
-    ];
-    for (const w of windows) {
-        if (!w.snap) continue;
-        const past = findPlayerInSnapshot(w.snap, player.UserID);
-        if (!past) continue;
+    const findPast = (snap, userId) => snap?.leagues?.[name]?.roster?.find(p => p.UserID === userId)?.Points;
 
-        const key = `${player.UserID}:${w.label}`;
-        const isStalled = player.Points - past.Points === 0;
-        if (isStalled && !alertState[key]) {
-            await sendDiscordAlert(
-                `⚠️ **${player.DisplayName}** (Rank #${player.Rank}) has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts).`
-            );
-            alertState[key] = true;
-        } else if (!isStalled) {
-            alertState[key] = false;
+    for (const player of currentRoster) {
+        const windows = [
+            { label: '10m', snap: snap10 },
+            { label: '30m', snap: snap30 },
+            { label: '1h',  snap: snap1h },
+        ];
+        for (const w of windows) {
+            if (!w.snap) continue;
+            const past = findPast(w.snap, player.UserID);
+            if (past == null) continue;
+
+            const key = `${name}:${player.UserID}:${w.label}`;
+            const isStalled = player.Points - past === 0;
+            if (isStalled && !alertState[key]) {
+                await sendDiscordAlert(`⚠️ **${player.DisplayName}** in **${name}** has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts).`);
+                alertState[key] = true;
+            } else if (!isStalled) {
+                alertState[key] = false;
+            }
         }
     }
 }
-
 writeFileSync(MONITOR_STATE_FILE, JSON.stringify(alertState));
-console.log(`Monitor check complete. Checked ${playersToCheck.length} players across available windows.`);
