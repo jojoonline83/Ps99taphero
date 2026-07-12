@@ -8,6 +8,7 @@ const TOP_PAGES          = 5;
 const PAGE_SIZE          = 100;
 const LIST_CONCURRENCY   = 10;
 const DETAIL_CONCURRENCY = 20;
+const MAX_PLAYERS        = 1000;
 
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = [];
@@ -33,17 +34,6 @@ async function fetchJson(url, attempts = 3) {
     return null;
 }
 
-async function fetchRaw(url, attempts = 3) {
-    for (let i = 0; i < attempts; i++) {
-        try {
-            const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-            if (res.ok) return await res.json();
-        } catch (_) {}
-        if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
-    }
-    return null;
-}
-
 async function mapWithConcurrency(items, limit, fn) {
     const results = new Array(items.length);
     let idx = 0;
@@ -55,10 +45,6 @@ async function mapWithConcurrency(items, limit, fn) {
     }
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
     return results;
-}
-
-function isUnresolvedName(entry) {
-    return entry.DisplayName === String(entry.UserID);
 }
 
 async function sendDiscordAlert(message) {
@@ -134,88 +120,26 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
-// 1. Get active clan battle info.
+// 1. Get active clan battle info to find the current battle key.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
 const battleData = battleInfo?.data;
-console.log(`Active battle keys: ${JSON.stringify(battleData ? Object.keys(battleData) : 'null')}`);
-if (battleData?.configData) {
-    console.log(`configData keys: ${JSON.stringify(Object.keys(battleData.configData))}`);
-    console.log(`configData.Name: ${battleData.configData.Name}`);
-    console.log(`configData sample: ${JSON.stringify(battleData.configData).slice(0, 400)}`);
-}
+const battleConfigName = battleData?.configName;
+const battleTitle = battleData?.configData?.Title || battleConfigName || 'Unknown';
+console.log(`Active battle: "${battleTitle}" (configName: ${battleConfigName})`);
 
-// 2. Fetch top clans — try multiple API paths.
-let clanSummaries = [];
-
-// Try /api/clans (no status wrapper)
-const apiClansRaw = await fetchRaw(`${API_BASE}/api/clans?page=1&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-console.log(`/api/clans raw keys: ${JSON.stringify(apiClansRaw ? Object.keys(apiClansRaw) : 'null')}`);
-if (apiClansRaw) console.log(`/api/clans sample: ${JSON.stringify(apiClansRaw).slice(0, 400)}`);
-
-// Try /v1/clans (with status:'ok' wrapper)
-const v1ClansRaw = await fetchRaw(`${API_BASE}/v1/clans?page=1&pageSize=10&sort=Points&sortOrder=desc`);
-console.log(`/v1/clans raw keys: ${JSON.stringify(v1ClansRaw ? Object.keys(v1ClansRaw) : 'null')}`);
-if (v1ClansRaw) console.log(`/v1/clans sample: ${JSON.stringify(v1ClansRaw).slice(0, 400)}`);
-
-// Try /api/clanBattle endpoint
-const clanBattleRaw = await fetchRaw(`${API_BASE}/api/clanBattle`);
-console.log(`/api/clanBattle raw: ${JSON.stringify(clanBattleRaw).slice(0, 400)}`);
-
-// Try /api/activeClanBattle/leaderboard
-const battleLbRaw = await fetchRaw(`${API_BASE}/api/activeClanBattle/leaderboard`);
-console.log(`/api/activeClanBattle/leaderboard: ${JSON.stringify(battleLbRaw).slice(0, 400)}`);
-
-// Try /api/clans without query params
-const apiClansPlain = await fetchRaw(`${API_BASE}/api/clans`);
-console.log(`/api/clans (no params) keys: ${JSON.stringify(apiClansPlain ? Object.keys(apiClansPlain) : 'null')}`);
-if (apiClansPlain?.data) {
-    const d = apiClansPlain.data;
-    if (Array.isArray(d)) {
-        console.log(`/api/clans data is array[${d.length}], first: ${JSON.stringify(d[0]).slice(0, 200)}`);
-    } else {
-        console.log(`/api/clans data keys: ${JSON.stringify(Object.keys(d))}`);
-        console.log(`/api/clans data sample: ${JSON.stringify(d).slice(0, 300)}`);
-    }
-}
-
-// Determine which source to use for clan list
-function extractClans(json) {
-    if (!json) return [];
-    if (json.status === 'ok' && json.data) {
-        if (Array.isArray(json.data)) return json.data;
-        if (Array.isArray(json.data.clans)) return json.data.clans;
-    }
-    if (Array.isArray(json.data)) return json.data;
-    if (Array.isArray(json)) return json;
-    return [];
-}
-
-// Try to get full page set from whichever endpoint works
-let workingEndpoint = null;
-if (extractClans(apiClansRaw).length) workingEndpoint = '/api/clans';
-else if (extractClans(v1ClansRaw).length) workingEndpoint = '/v1/clans';
-else if (extractClans(apiClansPlain).length) workingEndpoint = '/api/clans-plain';
-
-if (workingEndpoint === '/api/clans' || workingEndpoint === '/v1/clans') {
-    const base = workingEndpoint === '/api/clans' ? `${API_BASE}/api/clans` : `${API_BASE}/v1/clans`;
-    const fetcher = workingEndpoint === '/api/clans' ? fetchRaw : fetchJson;
-    const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
-    const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
-        const json = await fetcher(`${base}?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        return extractClans(json);
-    });
-    clanSummaries = pageResults.flat();
-} else if (workingEndpoint === '/api/clans-plain') {
-    clanSummaries = extractClans(apiClansPlain);
-}
-
-console.log(`Working endpoint: ${workingEndpoint || 'NONE'}, clans found: ${clanSummaries.length}`);
+// 2. Fetch top clans from /api/clans.
+const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
+const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
+    const json = await fetchJson(`${API_BASE}/api/clans?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+    return json?.data || [];
+});
+const clanSummaries = pageResults.flat();
 
 if (!clanSummaries.length) {
-    console.error('No clan data from any endpoint — skipping this snapshot.');
+    console.error('No clan data returned — skipping this snapshot.');
     process.exit(0);
 }
-console.log(`Fetched ${clanSummaries.length} clan summaries. First: ${JSON.stringify(clanSummaries[0]).slice(0, 200)}`);
+console.log(`Fetched ${clanSummaries.length} clan summaries.`);
 
 // 3. Fetch detail for each clan to get individual player battle contributions.
 let debuggedFirst = false;
@@ -223,70 +147,63 @@ const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, 
     const name = summary.Name || summary.name;
     if (!name) return [];
 
-    // Try both /api/clan/ and /v1/clans/ paths
-    let detail = null;
-    let detailJson = await fetchJson(`${API_BASE}/v1/clans/${encodeURIComponent(name)}`);
-    if (detailJson?.data) {
-        detail = detailJson.data;
-    } else {
-        const raw = await fetchRaw(`${API_BASE}/api/clan/${encodeURIComponent(name)}`);
-        if (raw?.data) detail = raw.data;
-        else if (raw && !raw.status) detail = raw;
-    }
+    const detailJson = await fetchJson(`${API_BASE}/api/clan/${encodeURIComponent(name)}`);
+    const detail = detailJson?.data;
     if (!detail) return [];
 
     if (!debuggedFirst) {
         debuggedFirst = true;
-        const keys = Object.keys(detail);
-        console.log(`Clan detail keys: ${JSON.stringify(keys)}`);
-        console.log(`BattleContributions: ${JSON.stringify(detail.BattleContributions?.slice?.(0, 2))}`);
-        console.log(`PointContributions: ${JSON.stringify(detail.PointContributions?.slice?.(0, 2))}`);
-        console.log(`Battles: ${JSON.stringify(detail.Battles)?.slice(0, 300)}`);
-        console.log(`Battle: ${JSON.stringify(detail.Battle)?.slice(0, 300)}`);
-        console.log(`Members sample: ${JSON.stringify(detail.Members?.slice?.(0, 1))?.slice(0, 200)}`);
+        const battleKeys = detail.Battles ? Object.keys(detail.Battles) : [];
+        console.log(`Clan "${name}" battle keys: ${JSON.stringify(battleKeys)}`);
+        if (battleConfigName && detail.Battles?.[battleConfigName]) {
+            const b = detail.Battles[battleConfigName];
+            console.log(`Active battle data: Points=${b.Points}, contributions=${b.PointContributions?.length || 0}`);
+        }
     }
 
-    // Extract individual players with their battle points
+    // Extract battle points from the active battle
     const battleContribs = {};
-    const contribSource = detail.BattleContributions || detail.PointContributions || detail.Battle?.Contributions || [];
-    (Array.isArray(contribSource) ? contribSource : []).forEach(c => {
-        battleContribs[c.UserID] = c.Points;
-    });
-
-    const players = [];
-    // Owner
-    if (detail.Owner && detail.Owner.UserID) {
-        players.push({
-            UserID: detail.Owner.UserID,
-            DisplayName: detail.Owner.DisplayName,
-            Points: battleContribs[detail.Owner.UserID] ?? 0,
-            Clan: name,
+    if (battleConfigName && detail.Battles?.[battleConfigName]) {
+        const battle = detail.Battles[battleConfigName];
+        (battle.PointContributions || []).forEach(c => {
+            battleContribs[c.UserID] = c.Points;
         });
     }
-    // Members
+
+    // Collect all members (Owner + Members list)
+    const allMemberIds = new Set();
+    const players = [];
+
+    if (detail.Owner) {
+        const uid = detail.Owner.UserID || detail.Owner;
+        if (typeof uid === 'number') {
+            allMemberIds.add(uid);
+            players.push({
+                UserID: uid,
+                DisplayName: String(uid),
+                Points: battleContribs[uid] ?? 0,
+                Clan: name,
+            });
+        }
+    }
+
     (detail.Members || []).forEach(m => {
-        if (!m.UserID) return;
+        const uid = m.UserID || m;
+        if (typeof uid !== 'number') return;
+        if (allMemberIds.has(uid)) return;
+        allMemberIds.add(uid);
         players.push({
-            UserID: m.UserID,
-            DisplayName: m.DisplayName,
-            Points: battleContribs[m.UserID] ?? 0,
+            UserID: uid,
+            DisplayName: String(uid),
+            Points: battleContribs[uid] ?? 0,
             Clan: name,
         });
     });
-    // Deputies / other roles
-    (detail.Deputies || []).forEach(m => {
-        if (!m.UserID) return;
-        players.push({
-            UserID: m.UserID,
-            DisplayName: m.DisplayName,
-            Points: battleContribs[m.UserID] ?? 0,
-            Clan: name,
-        });
-    });
+
     return players;
 });
 
-// 4. Flatten all players, deduplicate by UserID, sort by points desc.
+// 4. Flatten all players, deduplicate by UserID, sort by points desc, take top N.
 const playerMap = new Map();
 for (const roster of clanDetails) {
     for (const p of roster) {
@@ -296,29 +213,35 @@ for (const roster of clanDetails) {
         }
     }
 }
-let players = [...playerMap.values()].sort((a, b) => b.Points - a.Points);
-console.log(`Extracted ${players.length} individual players from ${clanSummaries.length} clans.`);
+let players = [...playerMap.values()]
+    .sort((a, b) => b.Points - a.Points)
+    .slice(0, MAX_PLAYERS);
 
-// 5. Resolve numeric-fallback display names.
+const totalExtracted = playerMap.size;
+console.log(`Extracted ${totalExtracted} players, keeping top ${players.length}.`);
+
+// 5. Resolve display names via Roblox API.
 let resolvedCache = {};
 if (existsSync(RESOLVED_CACHE_FILE)) {
     try { resolvedCache = JSON.parse(readFileSync(RESOLVED_CACHE_FILE, 'utf8')); } catch (_) { resolvedCache = {}; }
 }
 
-const needsResolve = new Set();
+const needsResolve = [];
 players.forEach(p => {
-    if (!isUnresolvedName(p)) return;
-    if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; return; }
-    needsResolve.add(p.UserID);
+    if (resolvedCache[p.UserID]) {
+        p.DisplayName = resolvedCache[p.UserID];
+    } else {
+        needsResolve.push(p.UserID);
+    }
 });
 
-if (needsResolve.size) {
-    const resolved = await resolveUsernames([...needsResolve]);
+if (needsResolve.length) {
+    const resolved = await resolveUsernames(needsResolve);
     players.forEach(p => {
-        if (isUnresolvedName(p) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
+        if (resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
     });
     Object.assign(resolvedCache, resolved);
-    console.log(`Resolved ${Object.keys(resolved).length}/${needsResolve.size} display names (${Object.keys(resolvedCache).length} cached).`);
+    console.log(`Resolved ${Object.keys(resolved).length}/${needsResolve.length} display names (${Object.keys(resolvedCache).length} cached).`);
 }
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
@@ -334,7 +257,7 @@ history = history.filter(entry => now - entry.ts <= RETENTION_MS);
 writeFileSync(HISTORY_FILE, JSON.stringify(history));
 
 const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-console.log(`Snapshot recorded: ${players.length} individual players in ${elapsedSec}s, ${history.length} snapshots retained.`);
+console.log(`Snapshot recorded: ${players.length} players in ${elapsedSec}s, ${history.length} snapshots retained.`);
 
 // 7. Player-level inactivity monitoring.
 mkdirSync(MONITOR_DIR, { recursive: true });
