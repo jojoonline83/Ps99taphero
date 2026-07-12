@@ -89,6 +89,30 @@ function playerDelta(userId, currentPoints, windowMs, toleranceMs) {
     };
 }
 
+// ── Summary Stats ─────────────────────────────
+function renderSummaryStats() {
+    const players = allPlayers();
+    document.getElementById('ss-total').textContent = fmt(players.length);
+    document.getElementById('ss-snapshots').textContent = historyData.length;
+
+    const windows = [
+        { id: 'ss-zero-10m', ms: 10 * 60_000, tol: 11 * 60_000 },
+        { id: 'ss-zero-30m', ms: 30 * 60_000, tol: 8  * 60_000 },
+        { id: 'ss-zero-1h',  ms: 60 * 60_000, tol: 12 * 60_000 },
+    ];
+    for (const w of windows) {
+        const snap = findSnapshotNear(w.ms, w.tol);
+        const el = document.getElementById(w.id);
+        if (!snap) { el.textContent = '—'; continue; }
+        let zeroCount = 0;
+        for (const p of players) {
+            const past = snap.players?.find(x => x.UserID === p.UserID)?.Points;
+            if (past !== undefined && p.Points - past === 0) zeroCount++;
+        }
+        el.textContent = fmt(zeroCount);
+    }
+}
+
 // ── Navigation ─────────────────────────────
 function showLeaderboard() {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -104,6 +128,8 @@ function showPlayerDetail(userId) {
 
 // ── Leaderboard rendering ──────────────────
 function renderLeaderboard() {
+    renderSummaryStats();
+
     const badge = document.getElementById('event-status-badge');
     const snap = latestSnapshot();
     badge.innerHTML = snap
