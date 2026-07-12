@@ -11,7 +11,7 @@ const DETAIL_CONCURRENCY = 20;
 const MAX_PLAYERS        = 5000;
 
 // Players to always monitor for inactivity (by display name or UserID).
-const MONITOR_PLAYER_NAMES = [];
+const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
 
 const MONITOR_DIR        = '.github/monitor-data';
 const MONITOR_STATE_FILE = `${MONITOR_DIR}/monitor_alert_state.json`;
