@@ -33,6 +33,17 @@ async function fetchJson(url, attempts = 3) {
     return null;
 }
 
+async function fetchRaw(url, attempts = 3) {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+            if (res.ok) return await res.json();
+        } catch (_) {}
+        if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+    return null;
+}
+
 async function mapWithConcurrency(items, limit, fn) {
     const results = new Array(items.length);
     let idx = 0;
@@ -125,25 +136,83 @@ const startedAt = Date.now();
 
 // 1. Get active clan battle info.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
-console.log(`Active battle response: ${JSON.stringify(battleInfo?.data ? Object.keys(battleInfo.data) : 'null')}`);
+const battleData = battleInfo?.data;
+console.log(`Active battle keys: ${JSON.stringify(battleData ? Object.keys(battleData) : 'null')}`);
+if (battleData?.configData) {
+    console.log(`configData keys: ${JSON.stringify(Object.keys(battleData.configData))}`);
+    console.log(`configData.Name: ${battleData.configData.Name}`);
+    console.log(`configData sample: ${JSON.stringify(battleData.configData).slice(0, 400)}`);
+}
 
-// 2. Fetch top clans sorted by battle points.
-const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
-const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
-    const json = await fetchJson(`${API_BASE}/v1/clans?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-    if (!json?.data) return [];
-    // Handle both array and {clans: [...]} response formats
+// 2. Fetch top clans — try multiple API paths.
+let clanSummaries = [];
+
+// Try /api/clans (no status wrapper)
+const apiClansRaw = await fetchRaw(`${API_BASE}/api/clans?page=1&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+console.log(`/api/clans raw keys: ${JSON.stringify(apiClansRaw ? Object.keys(apiClansRaw) : 'null')}`);
+if (apiClansRaw) console.log(`/api/clans sample: ${JSON.stringify(apiClansRaw).slice(0, 400)}`);
+
+// Try /v1/clans (with status:'ok' wrapper)
+const v1ClansRaw = await fetchRaw(`${API_BASE}/v1/clans?page=1&pageSize=10&sort=Points&sortOrder=desc`);
+console.log(`/v1/clans raw keys: ${JSON.stringify(v1ClansRaw ? Object.keys(v1ClansRaw) : 'null')}`);
+if (v1ClansRaw) console.log(`/v1/clans sample: ${JSON.stringify(v1ClansRaw).slice(0, 400)}`);
+
+// Try /api/clanBattle endpoint
+const clanBattleRaw = await fetchRaw(`${API_BASE}/api/clanBattle`);
+console.log(`/api/clanBattle raw: ${JSON.stringify(clanBattleRaw).slice(0, 400)}`);
+
+// Try /api/activeClanBattle/leaderboard
+const battleLbRaw = await fetchRaw(`${API_BASE}/api/activeClanBattle/leaderboard`);
+console.log(`/api/activeClanBattle/leaderboard: ${JSON.stringify(battleLbRaw).slice(0, 400)}`);
+
+// Try /api/clans without query params
+const apiClansPlain = await fetchRaw(`${API_BASE}/api/clans`);
+console.log(`/api/clans (no params) keys: ${JSON.stringify(apiClansPlain ? Object.keys(apiClansPlain) : 'null')}`);
+if (apiClansPlain?.data) {
+    const d = apiClansPlain.data;
+    if (Array.isArray(d)) {
+        console.log(`/api/clans data is array[${d.length}], first: ${JSON.stringify(d[0]).slice(0, 200)}`);
+    } else {
+        console.log(`/api/clans data keys: ${JSON.stringify(Object.keys(d))}`);
+        console.log(`/api/clans data sample: ${JSON.stringify(d).slice(0, 300)}`);
+    }
+}
+
+// Determine which source to use for clan list
+function extractClans(json) {
+    if (!json) return [];
+    if (json.status === 'ok' && json.data) {
+        if (Array.isArray(json.data)) return json.data;
+        if (Array.isArray(json.data.clans)) return json.data.clans;
+    }
     if (Array.isArray(json.data)) return json.data;
-    if (Array.isArray(json.data.clans)) return json.data.clans;
+    if (Array.isArray(json)) return json;
     return [];
-});
-const clanSummaries = pageResults.flat();
+}
+
+// Try to get full page set from whichever endpoint works
+let workingEndpoint = null;
+if (extractClans(apiClansRaw).length) workingEndpoint = '/api/clans';
+else if (extractClans(v1ClansRaw).length) workingEndpoint = '/v1/clans';
+else if (extractClans(apiClansPlain).length) workingEndpoint = '/api/clans-plain';
+
+if (workingEndpoint === '/api/clans' || workingEndpoint === '/v1/clans') {
+    const base = workingEndpoint === '/api/clans' ? `${API_BASE}/api/clans` : `${API_BASE}/v1/clans`;
+    const fetcher = workingEndpoint === '/api/clans' ? fetchRaw : fetchJson;
+    const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
+    const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
+        const json = await fetcher(`${base}?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        return extractClans(json);
+    });
+    clanSummaries = pageResults.flat();
+} else if (workingEndpoint === '/api/clans-plain') {
+    clanSummaries = extractClans(apiClansPlain);
+}
+
+console.log(`Working endpoint: ${workingEndpoint || 'NONE'}, clans found: ${clanSummaries.length}`);
 
 if (!clanSummaries.length) {
-    console.error('No clan data returned — skipping this snapshot.');
-    // Log one raw response for debugging
-    const debugJson = await fetchJson(`${API_BASE}/v1/clans?page=1&pageSize=10&sort=Points&sortOrder=desc`);
-    console.log(`Debug /v1/clans response: ${JSON.stringify(debugJson).slice(0, 500)}`);
+    console.error('No clan data from any endpoint — skipping this snapshot.');
     process.exit(0);
 }
 console.log(`Fetched ${clanSummaries.length} clan summaries. First: ${JSON.stringify(clanSummaries[0]).slice(0, 200)}`);
@@ -153,22 +222,34 @@ let debuggedFirst = false;
 const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, async summary => {
     const name = summary.Name || summary.name;
     if (!name) return [];
-    const detailJson = await fetchJson(`${API_BASE}/v1/clans/${encodeURIComponent(name)}`);
-    const detail = detailJson?.data;
+
+    // Try both /api/clan/ and /v1/clans/ paths
+    let detail = null;
+    let detailJson = await fetchJson(`${API_BASE}/v1/clans/${encodeURIComponent(name)}`);
+    if (detailJson?.data) {
+        detail = detailJson.data;
+    } else {
+        const raw = await fetchRaw(`${API_BASE}/api/clan/${encodeURIComponent(name)}`);
+        if (raw?.data) detail = raw.data;
+        else if (raw && !raw.status) detail = raw;
+    }
     if (!detail) return [];
 
     if (!debuggedFirst) {
         debuggedFirst = true;
         const keys = Object.keys(detail);
         console.log(`Clan detail keys: ${JSON.stringify(keys)}`);
-        console.log(`BattleContributions: ${JSON.stringify(detail.BattleContributions?.slice(0, 2))}`);
-        console.log(`PointContributions: ${JSON.stringify(detail.PointContributions?.slice(0, 2))}`);
+        console.log(`BattleContributions: ${JSON.stringify(detail.BattleContributions?.slice?.(0, 2))}`);
+        console.log(`PointContributions: ${JSON.stringify(detail.PointContributions?.slice?.(0, 2))}`);
         console.log(`Battles: ${JSON.stringify(detail.Battles)?.slice(0, 300)}`);
+        console.log(`Battle: ${JSON.stringify(detail.Battle)?.slice(0, 300)}`);
+        console.log(`Members sample: ${JSON.stringify(detail.Members?.slice?.(0, 1))?.slice(0, 200)}`);
     }
 
     // Extract individual players with their battle points
     const battleContribs = {};
-    (detail.BattleContributions || detail.PointContributions || []).forEach(c => {
+    const contribSource = detail.BattleContributions || detail.PointContributions || detail.Battle?.Contributions || [];
+    (Array.isArray(contribSource) ? contribSource : []).forEach(c => {
         battleContribs[c.UserID] = c.Points;
     });
 
