@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 
-const API_BASE           = 'https://ps99.biggamesapi.io/v1';
+const API_BASE           = 'https://ps99.biggamesapi.io';
 const HISTORY_FILE       = 'history.json';
 const RESOLVED_CACHE_FILE = 'resolved_names.json';
 const RETENTION_MS       = 95 * 60 * 1000;
@@ -123,66 +123,78 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
-// 1. Fetch the Top 500 league summaries (to extract individual players).
-const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
-const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
-    const json = await fetchJson(`${API_BASE}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-    return json?.data?.leagues || [];
-});
-const summaries = pageResults.flat();
-
-if (!summaries.length) {
-    console.error('No league data returned — skipping this snapshot.');
+// 1. Get active clan battle info.
+const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
+if (!battleInfo?.data) {
+    console.error('No active clan battle found — skipping this snapshot.');
     process.exit(0);
 }
+console.log(`Active battle: ${JSON.stringify(battleInfo.data.configData?.Name || battleInfo.data.Name || 'unknown')}`);
 
-// 2. Fetch full roster + point contributions for every league.
-function looksSuspicious(detail, summary) {
-    return typeof summary.Points === 'number' && summary.Points > 0 && detail.Points < summary.Points * 0.9;
+// 2. Fetch top clans sorted by battle points.
+const pageNums = Array.from({ length: TOP_PAGES }, (_, i) => i + 1);
+const pageResults = await mapWithConcurrency(pageNums, LIST_CONCURRENCY, async page => {
+    const json = await fetchJson(`${API_BASE}/v1/clans?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+    return json?.data || [];
+});
+const clanSummaries = pageResults.flat();
+
+if (!clanSummaries.length) {
+    console.error('No clan data returned — skipping this snapshot.');
+    process.exit(0);
 }
+console.log(`Fetched ${clanSummaries.length} clan summaries.`);
 
-const leagueDetails = await mapWithConcurrency(summaries, DETAIL_CONCURRENCY, async summary => {
-    const detailJson = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(summary.Name)}`);
-    let detail = detailJson?.data;
-
-    if (detail && looksSuspicious(detail, summary)) {
-        const retryJson = await fetchJson(`${API_BASE}/leagues/${encodeURIComponent(summary.Name)}`);
-        const retryDetail = retryJson?.data;
-        if (retryDetail && !looksSuspicious(retryDetail, summary)) {
-            detail = retryDetail;
-        } else {
-            detail = null;
-        }
-    }
-
+// 3. Fetch detail for each clan to get individual player battle contributions.
+const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, async summary => {
+    const name = summary.Name || summary.name;
+    if (!name) return [];
+    const detailJson = await fetchJson(`${API_BASE}/v1/clans/${encodeURIComponent(name)}`);
+    const detail = detailJson?.data;
     if (!detail) return [];
 
-    const contribByUser = {};
-    (detail.PointContributions || []).forEach(c => { contribByUser[c.UserID] = c.Points; });
+    // Extract individual players with their battle points
+    const battleContribs = {};
+    (detail.BattleContributions || detail.PointContributions || []).forEach(c => {
+        battleContribs[c.UserID] = c.Points;
+    });
 
     const players = [];
+    // Owner
     if (detail.Owner && detail.Owner.UserID) {
         players.push({
             UserID: detail.Owner.UserID,
             DisplayName: detail.Owner.DisplayName,
-            Points: contribByUser[detail.Owner.UserID] ?? 0,
-            Group: detail.Name,
+            Points: battleContribs[detail.Owner.UserID] ?? 0,
+            Clan: name,
         });
     }
+    // Members
     (detail.Members || []).forEach(m => {
+        if (!m.UserID) return;
         players.push({
             UserID: m.UserID,
             DisplayName: m.DisplayName,
-            Points: contribByUser[m.UserID] ?? 0,
-            Group: detail.Name,
+            Points: battleContribs[m.UserID] ?? 0,
+            Clan: name,
+        });
+    });
+    // Deputies / other roles
+    (detail.Deputies || []).forEach(m => {
+        if (!m.UserID) return;
+        players.push({
+            UserID: m.UserID,
+            DisplayName: m.DisplayName,
+            Points: battleContribs[m.UserID] ?? 0,
+            Clan: name,
         });
     });
     return players;
 });
 
-// 3. Flatten all players, deduplicate by UserID, sort by points desc.
+// 4. Flatten all players, deduplicate by UserID, sort by points desc.
 const playerMap = new Map();
-for (const roster of leagueDetails) {
+for (const roster of clanDetails) {
     for (const p of roster) {
         const existing = playerMap.get(p.UserID);
         if (!existing || p.Points > existing.Points) {
@@ -191,8 +203,9 @@ for (const roster of leagueDetails) {
     }
 }
 let players = [...playerMap.values()].sort((a, b) => b.Points - a.Points);
+console.log(`Extracted ${players.length} individual players from ${clanSummaries.length} clans.`);
 
-// 4. Resolve numeric-fallback display names.
+// 5. Resolve numeric-fallback display names.
 let resolvedCache = {};
 if (existsSync(RESOLVED_CACHE_FILE)) {
     try { resolvedCache = JSON.parse(readFileSync(RESOLVED_CACHE_FILE, 'utf8')); } catch (_) { resolvedCache = {}; }
@@ -215,7 +228,7 @@ if (needsResolve.size) {
 }
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
-// 5. Append snapshot and prune history.
+// 6. Append snapshot and prune history.
 let history = [];
 if (existsSync(HISTORY_FILE)) {
     try { history = JSON.parse(readFileSync(HISTORY_FILE, 'utf8')); } catch (_) { history = []; }
@@ -229,7 +242,7 @@ writeFileSync(HISTORY_FILE, JSON.stringify(history));
 const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(`Snapshot recorded: ${players.length} individual players in ${elapsedSec}s, ${history.length} snapshots retained.`);
 
-// 6. Player-level inactivity monitoring.
+// 7. Player-level inactivity monitoring.
 mkdirSync(MONITOR_DIR, { recursive: true });
 
 function findSnapshotNear(msAgo, toleranceMs) {
@@ -273,7 +286,7 @@ for (const player of monitoredPlayers) {
         const key = `${player.UserID}:${w.label}`;
         const isStalled = player.Points - past === 0;
         if (isStalled && !alertState[key]) {
-            await sendDiscordAlert(`⚠️ **${player.DisplayName}** has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts, group: ${player.Group}).`);
+            await sendDiscordAlert(`⚠️ **${player.DisplayName}** has earned 0 points over the last ${w.label} — possibly inactive (currently ${player.Points.toLocaleString()} pts, clan: ${player.Clan}).`);
             alertState[key] = true;
         } else if (!isStalled) {
             alertState[key] = false;

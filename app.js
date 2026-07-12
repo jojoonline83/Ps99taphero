@@ -135,7 +135,7 @@ function renderLeaderboard() {
       <tr ${clickAttr}>
         <td class="player-rank">${idx + 1}</td>
         <td class="player-name"><span class="st-team-dot" style="background:${color}"></span> ${esc(p.DisplayName)}</td>
-        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.Group || '—')}</td>
+        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.Clan || p.Group || '—')}</td>
         <td class="player-points" style="color:${color}">${hasPoints ? fmt(p.Points) : '—'}</td>
         <td style="color:${d10.color};font-size:12px">${d10.text}</td>
         <td style="color:${d30.color};font-size:12px">${d30.text}</td>
@@ -162,7 +162,7 @@ function renderPlayerDetail(userId) {
     document.getElementById('player-detail-sub').textContent = `User ID: ${player.UserID}`;
     document.getElementById('pd-rank').textContent = `#${fmt(rank)}`;
     document.getElementById('pd-pts').textContent = fmt(player.Points);
-    document.getElementById('pd-league').textContent = player.Group;
+    document.getElementById('pd-league').textContent = player.Clan || player.Group || '—';
 
     const d10 = playerDelta(userId, player.Points, 10 * 60_000, 11 * 60_000);
     const d30 = playerDelta(userId, player.Points, 30 * 60_000, 8  * 60_000);
