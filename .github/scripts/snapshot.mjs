@@ -21,9 +21,12 @@ const COLLECTION_TRACK = [
 ];
 const COLLECTION_STALL_TIERS = [20, 40, 60];
 
+const AUTH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+
 const MONITOR_DIR             = '.github/monitor-data';
 const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
 const COLLECTION_STATE_FILE   = `${MONITOR_DIR}/collection_state.json`;
+const AUTH_CALL_STATE_FILE    = `${MONITOR_DIR}/auth_call_state.json`;
 
 function webhookUrls() {
     return (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -429,14 +432,31 @@ function getTokenForUsername(username) {
     return process.env[envKey] || null;
 }
 
+let authCallState = {};
+if (existsSync(AUTH_CALL_STATE_FILE)) {
+    try { authCallState = JSON.parse(readFileSync(AUTH_CALL_STATE_FILE, 'utf8')); } catch (_) { authCallState = {}; }
+}
+
 async function fetchCollection(userId, username) {
     const token = username ? getTokenForUsername(username) : null;
-    if (token) {
-        console.log(`  Trying authenticated inventory for ${username}...`);
+    const authKey = username || String(userId);
+    const lastAuthCall = authCallState[authKey] || 0;
+    const authDue = Date.now() - lastAuthCall >= AUTH_REFRESH_INTERVAL_MS;
+
+    if (token && authDue) {
+        console.log(`  Triggering auth refresh for ${username} (conserving slots: every 30min)...`);
         const authResult = await fetchAuthenticatedInventory(token);
-        if (authResult.items) return authResult;
-        console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
+        authCallState[authKey] = Date.now();
+        if (authResult.items) {
+            console.log(`  Auth refresh done, now reading public endpoint for latest data...`);
+        } else {
+            console.log(`  Auth refresh failed (${authResult.reason}), trying public endpoint`);
+        }
+    } else if (token && !authDue) {
+        const minsAgo = Math.round((Date.now() - lastAuthCall) / 60000);
+        console.log(`  Skipping auth call (last refresh ${minsAgo}min ago), using public endpoint`);
     }
+
     const result = await fetchPlayerInventory(userId);
     if (result.items) return result;
     if (username) {
@@ -568,4 +588,5 @@ for (const track of COLLECTION_TRACK) {
     }
 }
 writeFileSync(COLLECTION_STATE_FILE, JSON.stringify(collectionState));
+writeFileSync(AUTH_CALL_STATE_FILE, JSON.stringify(authCallState));
 writeFileSync(COLLECTION_FILE, JSON.stringify(collectionDisplay));
