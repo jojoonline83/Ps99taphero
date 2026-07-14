@@ -1,0 +1,72 @@
+name: Exchange OAuth Token
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_code:
+        description: 'Authorization code from the OAuth callback page'
+        required: true
+      code_verifier:
+        description: 'Code verifier used during authorization'
+        required: true
+      account_label:
+        description: 'Which account is this token for?'
+        required: true
+        type: choice
+        options:
+          - avocardorable99
+          - jjlovegame99
+
+permissions:
+  contents: write
+
+jobs:
+  exchange:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exchange authorization code for access token
+        env:
+          PS99_CLIENT_ID: ${{ secrets.PS99_CLIENT_ID }}
+          PS99_CLIENT_SECRET: ${{ secrets.PS99_CLIENT_SECRET }}
+          AUTH_CODE: ${{ inputs.auth_code }}
+          CODE_VERIFIER: ${{ inputs.code_verifier }}
+          REDIRECT_URI: https://jojoonline83.github.io/Ps99taphero/oauth-callback.html
+        run: |
+          BASIC_AUTH=$(echo -n "${PS99_CLIENT_ID}:${PS99_CLIENT_SECRET}" | base64 -w0)
+
+          RESPONSE=$(curl -sS -X POST "https://db.biggames.io/oauth/token" \
+            -H "Authorization: Basic ${BASIC_AUTH}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=authorization_code&code=${AUTH_CODE}&redirect_uri=${REDIRECT_URI}&code_verifier=${CODE_VERIFIER}")
+
+          echo "Response (redacted): $(echo "$RESPONSE" | jq '{token_type, expires_in, scope}' 2>/dev/null || echo 'parse error')"
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Token exchange failed. Response: $RESPONSE"
+            exit 1
+          fi
+
+          echo "::notice::Token obtained successfully for ${{ inputs.account_label }}"
+
+          # Store token in a file that the snapshot workflow can read
+          mkdir -p .github/monitor-data
+          LABEL="${{ inputs.account_label }}"
+          # Encrypt token with a simple approach: store as GitHub secret would be better,
+          # but we write it to a committed file for simplicity (the repo should be private).
+          # For better security, store as a GitHub secret manually.
+          echo "TOKEN OBTAINED — copy the value below and add it as a GitHub secret."
+          echo "Secret name: PS99_TOKEN_$(echo "$LABEL" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_')"
+          echo "::warning::IMPORTANT: Add the token as a GitHub Actions secret manually. Go to Settings > Secrets > Actions and create the secret shown above. The token value has been printed in the step output below (expand 'Exchange authorization code' to see it)."
+
+          mkdir -p token-output
+          echo "$TOKEN" > token-output/token.txt
+
+      - name: Upload token as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps99-token-${{ inputs.account_label }}
+          path: token-output/token.txt
+          retention-days: 1

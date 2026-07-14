@@ -343,6 +343,46 @@ async function resolveUsernameToId(username) {
     return null;
 }
 
+async function fetchAuthenticatedInventory(token) {
+    const url = `${API_BASE}/v1/account/inventory`;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const res = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${token}` },
+                signal: AbortSignal.timeout(30000),
+            });
+            const text = await res.text();
+            if (res.status === 401 || res.status === 403) {
+                console.log(`  Auth inventory: ${res.status} — token expired or revoked`);
+                return { items: null, reason: 'token_expired' };
+            }
+            if (!res.ok) {
+                console.log(`  Auth inventory: ${res.status} body: ${text.slice(0, 200)}`);
+                if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
+                return { items: null, reason: 'api_error' };
+            }
+            let json;
+            try { json = JSON.parse(text); } catch (_) {
+                return { items: null, reason: 'api_error' };
+            }
+            if (json.status !== 'ok' || !json.data) {
+                return { items: null, reason: 'api_error' };
+            }
+            const items = json.data.items;
+            if (!Array.isArray(items)) {
+                console.log(`  Auth inventory: no items array. Keys: ${Object.keys(json.data || {})}`);
+                return { items: null, reason: 'no_items' };
+            }
+            console.log(`  Auth inventory: ${items.length} items (triggers snapshot refresh)`);
+            return { items, reason: null };
+        } catch (err) {
+            console.log(`  Auth inventory error: ${err.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
+    }
+    return { items: null, reason: 'network_error' };
+}
+
 async function fetchPlayerInventory(slug) {
     const url = `${API_BASE}/v1/players/${slug}?include=inventory`;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -367,7 +407,6 @@ async function fetchPlayerInventory(slug) {
             if (!invView || !invView.available) {
                 const reason = invView?.reason || 'unknown';
                 console.log(`  Inventory not available for ${slug}: ${reason}`);
-                console.log(`  publicViews: ${JSON.stringify(json.data.account?.publicViews || {})}`);
                 return { items: null, reason };
             }
             const items = invView.data?.items;
@@ -385,7 +424,19 @@ async function fetchPlayerInventory(slug) {
     return { items: null, reason: 'network_error' };
 }
 
+function getTokenForUsername(username) {
+    const envKey = `PS99_TOKEN_${username.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+    return process.env[envKey] || null;
+}
+
 async function fetchCollection(userId, username) {
+    const token = username ? getTokenForUsername(username) : null;
+    if (token) {
+        console.log(`  Trying authenticated inventory for ${username}...`);
+        const authResult = await fetchAuthenticatedInventory(token);
+        if (authResult.items) return authResult;
+        console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
+    }
     const result = await fetchPlayerInventory(userId);
     if (result.items) return result;
     if (username) {
@@ -420,6 +471,7 @@ for (const track of COLLECTION_TRACK) {
             no_recent_data: 'Linked but needs to open PS99 to refresh data',
             not_public: 'Inventory not set to public',
             player_not_found: 'Account not linked on db.biggames.io',
+            token_expired: 'OAuth token expired — re-authorize via Exchange Token workflow',
         }[fetchResult.reason] || fetchResult.reason;
         console.log(`  Could not fetch inventory for ${displayName}: ${reasonText}`);
         collectionDisplay.push({
