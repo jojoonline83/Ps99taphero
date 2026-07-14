@@ -444,17 +444,14 @@ async function fetchCollection(userId, username) {
     const authDue = Date.now() - lastAuthCall >= AUTH_REFRESH_INTERVAL_MS;
 
     if (token && authDue) {
-        console.log(`  Triggering auth refresh for ${username} (conserving slots: every 30min)...`);
+        console.log(`  Auth refresh for ${username} (every 30min to conserve slots)...`);
         const authResult = await fetchAuthenticatedInventory(token);
         authCallState[authKey] = Date.now();
-        if (authResult.items) {
-            console.log(`  Auth refresh done, now reading public endpoint for latest data...`);
-        } else {
-            console.log(`  Auth refresh failed (${authResult.reason}), trying public endpoint`);
-        }
+        if (authResult.items) return authResult;
+        console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
     } else if (token && !authDue) {
         const minsAgo = Math.round((Date.now() - lastAuthCall) / 60000);
-        console.log(`  Skipping auth call (last refresh ${minsAgo}min ago), using public endpoint`);
+        console.log(`  Skipping auth (last ${minsAgo}min ago), using public endpoint`);
     }
 
     const result = await fetchPlayerInventory(userId);
