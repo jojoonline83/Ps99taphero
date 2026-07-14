@@ -9,6 +9,12 @@ on:
       code_verifier:
         description: 'Code verifier used during authorization'
         required: true
+      client_id:
+        description: 'Client ID (from developer app page)'
+        required: true
+      client_secret:
+        description: 'Client Secret (from developer app page)'
+        required: true
       account_label:
         description: 'Which account is this token for?'
         required: true
@@ -28,38 +34,35 @@ jobs:
 
       - name: Exchange authorization code for access token
         env:
-          PS99_CLIENT_ID: ${{ secrets.PS99_CLIENT_ID }}
-          PS99_CLIENT_SECRET: ${{ secrets.PS99_CLIENT_SECRET }}
           AUTH_CODE: ${{ inputs.auth_code }}
           CODE_VERIFIER: ${{ inputs.code_verifier }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          CLIENT_SECRET: ${{ inputs.client_secret }}
           REDIRECT_URI: https://jojoonline83.github.io/Ps99taphero/oauth-callback.html
         run: |
-          BASIC_AUTH=$(echo -n "${PS99_CLIENT_ID}:${PS99_CLIENT_SECRET}" | base64 -w0)
+          echo "Client ID: ${CLIENT_ID}"
+          echo "Auth Code: ${AUTH_CODE}"
+          echo "Redirect URI: ${REDIRECT_URI}"
+          echo "Verifier length: ${#CODE_VERIFIER}"
+
+          BASIC_AUTH=$(echo -n "${CLIENT_ID}:${CLIENT_SECRET}" | base64 -w0)
 
           RESPONSE=$(curl -sS -X POST "https://db.biggames.io/oauth/token" \
             -H "Authorization: Basic ${BASIC_AUTH}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=authorization_code&code=${AUTH_CODE}&redirect_uri=${REDIRECT_URI}&code_verifier=${CODE_VERIFIER}")
 
-          echo "Response (redacted): $(echo "$RESPONSE" | jq '{token_type, expires_in, scope}' 2>/dev/null || echo 'parse error')"
+          echo "Full response: $RESPONSE"
 
           TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
           if [ -z "$TOKEN" ]; then
-            echo "::error::Token exchange failed. Response: $RESPONSE"
+            echo "::error::Token exchange failed."
             exit 1
           fi
 
+          echo "::add-mask::$TOKEN"
           echo "::notice::Token obtained successfully for ${{ inputs.account_label }}"
-
-          # Store token in a file that the snapshot workflow can read
-          mkdir -p .github/monitor-data
-          LABEL="${{ inputs.account_label }}"
-          # Encrypt token with a simple approach: store as GitHub secret would be better,
-          # but we write it to a committed file for simplicity (the repo should be private).
-          # For better security, store as a GitHub secret manually.
-          echo "TOKEN OBTAINED — copy the value below and add it as a GitHub secret."
-          echo "Secret name: PS99_TOKEN_$(echo "$LABEL" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_')"
-          echo "::warning::IMPORTANT: Add the token as a GitHub Actions secret manually. Go to Settings > Secrets > Actions and create the secret shown above. The token value has been printed in the step output below (expand 'Exchange authorization code' to see it)."
+          echo "Secret name: PS99_TOKEN_$(echo "${{ inputs.account_label }}" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_')"
 
           mkdir -p token-output
           echo "$TOKEN" > token-output/token.txt
