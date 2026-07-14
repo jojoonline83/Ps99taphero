@@ -447,8 +447,27 @@ async function fetchCollection(userId, username) {
         console.log(`  Auth refresh for ${username} (every 30min to conserve slots)...`);
         const authResult = await fetchAuthenticatedInventory(token);
         authCallState[authKey] = Date.now();
-        if (authResult.items) return authResult;
-        console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
+        if (!authResult.items) {
+            console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
+        } else {
+            const authPets = authResult.items.filter(i => i.class === 'Pet');
+            const authTotal = authPets.reduce((s, p) => s + (p.count || 1), 0);
+            console.log(`  Auth returned ${authTotal.toLocaleString()} total pets (${authPets.length} unique)`);
+            console.log(`  Waiting 5s for server-side refresh to propagate...`);
+            await new Promise(r => setTimeout(r, 5000));
+            const pubResult = await fetchPlayerInventory(userId);
+            if (pubResult.items) {
+                const pubPets = pubResult.items.filter(i => i.class === 'Pet');
+                const pubTotal = pubPets.reduce((s, p) => s + (p.count || 1), 0);
+                console.log(`  Public returned ${pubTotal.toLocaleString()} total pets (${pubPets.length} unique)`);
+                if (pubTotal !== authTotal) {
+                    console.log(`  Data differs! Using public (newer) data`);
+                    return pubResult;
+                }
+                console.log(`  Auth & public match — using auth data`);
+            }
+            return authResult;
+        }
     } else if (token && !authDue) {
         const minsAgo = Math.round((Date.now() - lastAuthCall) / 60000);
         console.log(`  Skipping auth (last ${minsAgo}min ago), using public endpoint`);
