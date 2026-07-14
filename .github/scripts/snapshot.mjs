@@ -19,7 +19,7 @@ const COLLECTION_TRACK = [
     { username: 'avocardorable99', watchPets: ['Samurai Kitsune'] },
     { username: 'jjlovegame99', watchPets: ['Samurai Kitsune'] },
 ];
-const COLLECTION_STALL_MINUTES = 20;
+const COLLECTION_STALL_TIERS = [10, 30, 60];
 
 const MONITOR_DIR             = '.github/monitor-data';
 const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
@@ -532,35 +532,39 @@ for (const track of COLLECTION_TRACK) {
         ts: now,
     });
 
-    if (prev) {
-        const minutesSinceLast = (now - (prev.ts || 0)) / 60000;
+    const petLines = watchSummary.map(w => {
+        const variantText = w.variants.map(v => `${v.label} x${v.count}`).join(', ');
+        return `• ${w.name}: **${w.total}** (${variantText || 'none'})`;
+    }).join('\n');
 
-        if (diff === 0 && minutesSinceLast >= COLLECTION_STALL_MINUTES && !prev.stallAlerted) {
-            await sendDiscordAlert(
-                `🥚 **${displayName}** pet count unchanged at **${totalPets.toLocaleString()}** for the last ~${Math.round(minutesSinceLast)} min — hatching may be stuck.`
-            );
-            collectionState[uid] = { ...prev, ts: now, stallAlerted: true };
-        } else if (diff > 0) {
-            const petLines = watchSummary.map(w => {
-                const variantText = w.variants.map(v => `${v.label} x${v.count}`).join(', ');
-                return `• ${w.name}: **${w.total}** (${variantText || 'none'})`;
-            }).join('\n');
+    if (prev) {
+        const lastIncreaseTs = prev.lastIncreaseTs || prev.ts || now;
+        const alertedTiers = prev.alertedTiers || [];
+
+        if (diff > 0) {
             await sendDiscordAlert(
                 `✅ **${displayName}** gained **${diff}** pets (now ${totalPets.toLocaleString()}).\n${petLines}`
             );
-            collectionState[uid] = { ts: now, totalPets, stallAlerted: false };
+            collectionState[uid] = { lastIncreaseTs: now, totalPets, alertedTiers: [] };
         } else {
-            collectionState[uid] = { ...prev, ts: prev.stallAlerted ? prev.ts : now, totalPets };
+            const minutesSinceIncrease = (now - lastIncreaseTs) / 60000;
+            const newAlertedTiers = [...alertedTiers];
+            for (const tier of COLLECTION_STALL_TIERS) {
+                if (minutesSinceIncrease >= tier && !alertedTiers.includes(tier)) {
+                    const label = tier >= 60 ? `${tier / 60} hour` : `${tier} min`;
+                    await sendDiscordAlert(
+                        `🥚 **${displayName}** pet count unchanged at **${totalPets.toLocaleString()}** for the last ~${label} — hatching may be stuck.\n${petLines}`
+                    );
+                    newAlertedTiers.push(tier);
+                }
+            }
+            collectionState[uid] = { lastIncreaseTs, totalPets, alertedTiers: newAlertedTiers };
         }
     } else {
-        const petLines = watchSummary.map(w => {
-            const variantText = w.variants.map(v => `${v.label} x${v.count}`).join(', ');
-            return `• ${w.name}: **${w.total}** (${variantText || 'none'})`;
-        }).join('\n');
         await sendDiscordAlert(
             `📦 Started tracking **${displayName}**'s collection: **${totalPets.toLocaleString()}** total pets.\n${petLines}`
         );
-        collectionState[uid] = { ts: now, totalPets, stallAlerted: false };
+        collectionState[uid] = { lastIncreaseTs: now, totalPets, alertedTiers: [] };
     }
 }
 writeFileSync(COLLECTION_STATE_FILE, JSON.stringify(collectionState));
