@@ -13,8 +13,15 @@ const MAX_PLAYERS        = 5000;
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
 
-const MONITOR_DIR        = '.github/monitor-data';
-const MONITOR_STATE_FILE = `${MONITOR_DIR}/monitor_alert_state.json`;
+// Pet collection tracking config.
+const COLLECTION_TRACK = [
+    { username: 'avocardorable99', watchPets: ['Samurai Kitsune'] },
+];
+const COLLECTION_STALL_MINUTES = 20;
+
+const MONITOR_DIR             = '.github/monitor-data';
+const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
+const COLLECTION_STATE_FILE   = `${MONITOR_DIR}/collection_state.json`;
 
 function webhookUrls() {
     return (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -311,3 +318,104 @@ for (const player of monitoredPlayers) {
     }
 }
 writeFileSync(MONITOR_STATE_FILE, JSON.stringify(alertState));
+
+// 8. Pet collection tracking.
+async function resolveUsernameToId(username) {
+    const url = 'https://users.roblox.com/v1/usernames/users';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ usernames: [username], excludeBannedUsers: false }),
+                signal: AbortSignal.timeout(10000),
+            });
+            if (res.ok) {
+                const json = await res.json();
+                const user = json.data?.[0];
+                if (user) return { id: user.id, displayName: user.displayName || user.name };
+            }
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 500 * attempt));
+    }
+    return null;
+}
+
+async function fetchCollection(userId) {
+    const json = await fetchJson(`${API_BASE}/api/collection/${userId}`);
+    if (!json?.data || !Array.isArray(json.data)) return null;
+    return json.data;
+}
+
+let collectionState = {};
+if (existsSync(COLLECTION_STATE_FILE)) {
+    try { collectionState = JSON.parse(readFileSync(COLLECTION_STATE_FILE, 'utf8')); } catch (_) { collectionState = {}; }
+}
+
+for (const track of COLLECTION_TRACK) {
+    const user = await resolveUsernameToId(track.username);
+    if (!user) {
+        console.log(`Collection tracking: could not resolve username "${track.username}"`);
+        continue;
+    }
+    const uid = String(user.id);
+    const displayName = user.displayName;
+    console.log(`Collection tracking: ${displayName} (${uid})`);
+
+    const collection = await fetchCollection(user.id);
+    if (!collection) {
+        console.log(`  Could not fetch collection for ${displayName}`);
+        continue;
+    }
+
+    const totalPets = collection.reduce((sum, pet) => sum + (pet.count || 1), 0);
+    const uniquePets = collection.length;
+
+    const watchSummary = [];
+    for (const petName of (track.watchPets || [])) {
+        const nameLower = petName.toLowerCase();
+        const matches = collection.filter(p => (p.id || '').toLowerCase().includes(nameLower));
+        const totalCount = matches.reduce((sum, p) => sum + (p.count || 1), 0);
+        const variants = matches.map(p => {
+            const tags = [];
+            if (p.sh) tags.push('Shiny');
+            if (p.pt === 2) tags.push('Gold');
+            if (p.pt === 3) tags.push('Rainbow');
+            const label = tags.length ? ` (${tags.join(', ')})` : '';
+            return `${p.id}${label} x${p.count || 1}`;
+        });
+        watchSummary.push({ name: petName, total: totalCount, variants });
+        console.log(`  ${petName}: ${totalCount} total — ${variants.join(', ') || 'none found'}`);
+    }
+
+    console.log(`  Total pets: ${totalPets} (${uniquePets} unique entries)`);
+
+    const prev = collectionState[uid];
+    if (prev) {
+        const prevTotal = prev.totalPets || 0;
+        const diff = totalPets - prevTotal;
+        const minutesSinceLast = (now - (prev.ts || 0)) / 60000;
+
+        if (diff === 0 && minutesSinceLast >= COLLECTION_STALL_MINUTES && !prev.stallAlerted) {
+            await sendDiscordAlert(
+                `🥚 **${displayName}** pet count unchanged at **${totalPets.toLocaleString()}** for the last ~${Math.round(minutesSinceLast)} min — hatching may be stuck.`
+            );
+            collectionState[uid] = { ...prev, ts: now, stallAlerted: true };
+        } else if (diff > 0) {
+            const petLines = watchSummary.map(w => `• ${w.name}: **${w.total}** (${w.variants.join(', ') || 'none'})`).join('\n');
+            await sendDiscordAlert(
+                `✅ **${displayName}** gained **${diff}** pets (now ${totalPets.toLocaleString()}).\n${petLines}`
+            );
+            collectionState[uid] = { ts: now, totalPets, stallAlerted: false };
+        } else {
+            collectionState[uid] = { ...prev, ts: prev.stallAlerted ? prev.ts : now, totalPets };
+        }
+    } else {
+        const petLines = watchSummary.map(w => `• ${w.name}: **${w.total}** (${w.variants.join(', ') || 'none'})`).join('\n');
+        await sendDiscordAlert(
+            `📦 Started tracking **${displayName}**'s collection: **${totalPets.toLocaleString()}** total pets.\n${petLines}`
+        );
+        collectionState[uid] = { ts: now, totalPets, stallAlerted: false };
+    }
+}
+writeFileSync(COLLECTION_STATE_FILE, JSON.stringify(collectionState));
