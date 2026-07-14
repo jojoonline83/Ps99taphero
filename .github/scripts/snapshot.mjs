@@ -16,6 +16,7 @@ const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
 // Pet collection tracking config.
 const COLLECTION_TRACK = [
     { username: 'avocardorable99', watchPets: ['Samurai Kitsune'] },
+    { username: 'jjlovegame99', watchPets: ['Samurai Kitsune'] },
 ];
 const COLLECTION_STALL_MINUTES = 20;
 
