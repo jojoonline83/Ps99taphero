@@ -1,1 +1,1 @@
-{"3079452920":{"ts":1784033775973,"totalPets":21359441,"stallAlerted":false},"3543344398":{"ts":1784033775973,"totalPets":343300781,"stallAlerted":false}}
+{"3079452920":{"lastIncreaseTs":1784033775973,"totalPets":21359441,"alertedTiers":[10]},"3543344398":{"lastIncreaseTs":1784034380230,"totalPets":343320366,"alertedTiers":[]}}
