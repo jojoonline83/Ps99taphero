@@ -50,6 +50,8 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TEST_DISCORD_ALERT: ${{ github.event.inputs.test_discord_alert }}
+          PS99_TOKEN_AVOCARDORABLE99: ${{ secrets.PS99_TOKEN_AVOCARDORABLE99 }}
+          PS99_TOKEN_JJLOVEGAME99: ${{ secrets.PS99_TOKEN_JJLOVEGAME99 }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
