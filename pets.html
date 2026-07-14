@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>PS99 Pet Collection Tracker</title>
+    <link rel="stylesheet" href="style.css?v=4">
+    <style>
+        .player-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xl);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .player-card-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 20px;
+        }
+        .player-card-header h2 {
+            font-size: 22px;
+            font-weight: 900;
+        }
+        .player-card-header .uid {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .pet-stats {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .pet-stat {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px 18px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            min-width: 110px;
+            flex: 1;
+        }
+        .pet-stat-value {
+            font-size: 24px;
+            font-weight: 900;
+            color: var(--accent);
+        }
+        .pet-stat-value.positive { color: var(--success); }
+        .pet-stat-value.zero { color: var(--text-muted); }
+        .pet-stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+        .watch-pet-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            margin-top: 12px;
+        }
+        .watch-pet-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: var(--gold);
+            margin-bottom: 10px;
+        }
+        .variant-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .variant-row:last-child { border-bottom: none; }
+        .variant-name { color: var(--text-primary); font-weight: 600; }
+        .variant-count { color: var(--accent-2); font-weight: 800; font-family: monospace; }
+        .no-data {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+        .nav-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .nav-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="header-content">
+        <div class="logo">
+            <span class="logo-icon">🐾</span>
+            <h1>PS99 Pet Collection Tracker</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+            <a href="index.html" class="nav-link">Leaderboard</a>
+            <span id="pet-status-badge"></span>
+            <button class="btn-refresh" id="refresh-btn">Refresh</button>
+        </div>
+    </div>
+</header>
+
+<main>
+    <div class="event-info-bar">
+        <div>
+            <div class="event-title">Pet Collection Monitor</div>
+            <div class="event-dates">Tracks pet inventory for monitored players — refreshed every ~10 minutes</div>
+        </div>
+    </div>
+
+    <div id="players-container">
+        <div class="no-data">Loading collection data...</div>
+    </div>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="pets.js?v=1"></script>
+</body>
+</html>

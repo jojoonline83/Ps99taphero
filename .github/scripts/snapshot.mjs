@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 
 const API_BASE           = 'https://ps99.biggamesapi.io';
-const HISTORY_FILE       = 'history.json';
+const HISTORY_FILE        = 'history.json';
+const COLLECTION_FILE     = 'collection.json';
 const RESOLVED_CACHE_FILE = 'resolved_names.json';
 const RETENTION_MS       = 95 * 60 * 1000;
 const TOP_PAGES          = 5;
@@ -353,6 +354,8 @@ if (existsSync(COLLECTION_STATE_FILE)) {
     try { collectionState = JSON.parse(readFileSync(COLLECTION_STATE_FILE, 'utf8')); } catch (_) { collectionState = {}; }
 }
 
+const collectionDisplay = [];
+
 for (const track of COLLECTION_TRACK) {
     const user = await resolveUsernameToId(track.username);
     if (!user) {
@@ -383,18 +386,31 @@ for (const track of COLLECTION_TRACK) {
             if (p.pt === 2) tags.push('Gold');
             if (p.pt === 3) tags.push('Rainbow');
             const label = tags.length ? ` (${tags.join(', ')})` : '';
-            return `${p.id}${label} x${p.count || 1}`;
+            return { label: `${p.id}${label}`, count: p.count || 1 };
         });
         watchSummary.push({ name: petName, total: totalCount, variants });
-        console.log(`  ${petName}: ${totalCount} total — ${variants.join(', ') || 'none found'}`);
+        const variantText = variants.map(v => `${v.label} x${v.count}`).join(', ');
+        console.log(`  ${petName}: ${totalCount} total — ${variantText || 'none found'}`);
     }
 
     console.log(`  Total pets: ${totalPets} (${uniquePets} unique entries)`);
 
     const prev = collectionState[uid];
+    const prevTotal = prev?.totalPets || 0;
+    const diff = prev ? totalPets - prevTotal : 0;
+
+    collectionDisplay.push({
+        username: track.username,
+        displayName,
+        userId: user.id,
+        totalPets,
+        uniquePets,
+        diff,
+        watchPets: watchSummary,
+        ts: now,
+    });
+
     if (prev) {
-        const prevTotal = prev.totalPets || 0;
-        const diff = totalPets - prevTotal;
         const minutesSinceLast = (now - (prev.ts || 0)) / 60000;
 
         if (diff === 0 && minutesSinceLast >= COLLECTION_STALL_MINUTES && !prev.stallAlerted) {
@@ -403,7 +419,10 @@ for (const track of COLLECTION_TRACK) {
             );
             collectionState[uid] = { ...prev, ts: now, stallAlerted: true };
         } else if (diff > 0) {
-            const petLines = watchSummary.map(w => `• ${w.name}: **${w.total}** (${w.variants.join(', ') || 'none'})`).join('\n');
+            const petLines = watchSummary.map(w => {
+                const variantText = w.variants.map(v => `${v.label} x${v.count}`).join(', ');
+                return `• ${w.name}: **${w.total}** (${variantText || 'none'})`;
+            }).join('\n');
             await sendDiscordAlert(
                 `✅ **${displayName}** gained **${diff}** pets (now ${totalPets.toLocaleString()}).\n${petLines}`
             );
@@ -412,7 +431,10 @@ for (const track of COLLECTION_TRACK) {
             collectionState[uid] = { ...prev, ts: prev.stallAlerted ? prev.ts : now, totalPets };
         }
     } else {
-        const petLines = watchSummary.map(w => `• ${w.name}: **${w.total}** (${w.variants.join(', ') || 'none'})`).join('\n');
+        const petLines = watchSummary.map(w => {
+            const variantText = w.variants.map(v => `${v.label} x${v.count}`).join(', ');
+            return `• ${w.name}: **${w.total}** (${variantText || 'none'})`;
+        }).join('\n');
         await sendDiscordAlert(
             `📦 Started tracking **${displayName}**'s collection: **${totalPets.toLocaleString()}** total pets.\n${petLines}`
         );
@@ -420,3 +442,4 @@ for (const track of COLLECTION_TRACK) {
     }
 }
 writeFileSync(COLLECTION_STATE_FILE, JSON.stringify(collectionState));
+writeFileSync(COLLECTION_FILE, JSON.stringify(collectionDisplay));
