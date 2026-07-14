@@ -344,22 +344,28 @@ async function resolveUsernameToId(username) {
 }
 
 async function fetchCollection(userId) {
-    const endpoints = [
-        `${API_BASE}/api/collection/Pets/${userId}`,
-        `${API_BASE}/api/collection/${userId}/Pets`,
-        `${API_BASE}/api/collection/${userId}`,
-        `${API_BASE}/api/userInventory/${userId}`,
+    const collections = ['Pets', 'Pet', 'pets', 'Inventory', 'Normal', 'Huge', 'All'];
+    const patterns = [
+        uid => `${API_BASE}/api/collection/${uid}?collection=Pets`,
+        uid => `${API_BASE}/api/collection/${uid}?type=Pets`,
+        ...collections.map(c => uid => `${API_BASE}/api/collection/${c}/${uid}`),
+        uid => `${API_BASE}/api/exists/${uid}`,
+        uid => `${API_BASE}/api/RAP/${uid}`,
     ];
-    for (const url of endpoints) {
+    for (const mkUrl of patterns) {
+        const url = mkUrl(userId);
         try {
             const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
             const text = await res.text();
-            console.log(`  ${url} → ${res.status} (${text.length} bytes) body preview: ${text.slice(0, 200)}`);
+            const preview = text.slice(0, 300);
+            console.log(`  ${url} → ${res.status} body: ${preview}`);
             if (!res.ok) continue;
             let json;
             try { json = JSON.parse(text); } catch (_) { continue; }
-            if (json.data && Array.isArray(json.data)) return json.data;
-            if (Array.isArray(json)) return json;
+            if (json.status === 'ok' && json.data && Array.isArray(json.data)) return json.data;
+            if (json.status === 'ok' && json.data) {
+                console.log(`  ^ Found data (type=${typeof json.data}, keys=${Object.keys(json.data).slice(0,10)})`);
+            }
         } catch (err) {
             console.log(`  ${url} → error: ${err.message}`);
         }
