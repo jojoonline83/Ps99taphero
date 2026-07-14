@@ -19,7 +19,7 @@ const COLLECTION_TRACK = [
     { username: 'avocardorable99', watchPets: ['Samurai Kitsune'] },
     { username: 'jjlovegame99', watchPets: ['Samurai Kitsune'] },
 ];
-const COLLECTION_STALL_TIERS = [10, 30, 60];
+const COLLECTION_STALL_TIERS = [20, 40, 60];
 
 const MONITOR_DIR             = '.github/monitor-data';
 const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
