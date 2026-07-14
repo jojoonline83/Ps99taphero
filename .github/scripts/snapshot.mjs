@@ -345,32 +345,23 @@ async function resolveUsernameToId(username) {
 
 async function fetchCollection(userId) {
     const endpoints = [
+        `${API_BASE}/api/collection/Pets/${userId}`,
+        `${API_BASE}/api/collection/${userId}/Pets`,
         `${API_BASE}/api/collection/${userId}`,
-        `${API_BASE}/api/collections/${userId}`,
-        `${API_BASE}/api/inventory/${userId}`,
+        `${API_BASE}/api/userInventory/${userId}`,
     ];
     for (const url of endpoints) {
-        for (let i = 0; i < 3; i++) {
-            try {
-                const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-                const text = await res.text();
-                if (!res.ok) {
-                    console.log(`  Collection endpoint ${url} returned ${res.status}`);
-                    break;
-                }
-                let json;
-                try { json = JSON.parse(text); } catch (_) {
-                    console.log(`  Collection endpoint ${url} returned non-JSON`);
-                    break;
-                }
-                console.log(`  Collection endpoint ${url} status field: "${json.status}", data type: ${typeof json.data}, isArray: ${Array.isArray(json.data)}, length: ${Array.isArray(json.data) ? json.data.length : 'n/a'}`);
-                if (json.data && Array.isArray(json.data)) return json.data;
-                if (Array.isArray(json)) return json;
-                break;
-            } catch (err) {
-                console.log(`  Collection endpoint ${url} error: ${err.message}`);
-                if (i < 2) await new Promise(r => setTimeout(r, 500 * (i + 1)));
-            }
+        try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+            const text = await res.text();
+            console.log(`  ${url} → ${res.status} (${text.length} bytes) body preview: ${text.slice(0, 200)}`);
+            if (!res.ok) continue;
+            let json;
+            try { json = JSON.parse(text); } catch (_) { continue; }
+            if (json.data && Array.isArray(json.data)) return json.data;
+            if (Array.isArray(json)) return json;
+        } catch (err) {
+            console.log(`  ${url} → error: ${err.message}`);
         }
     }
     return null;
