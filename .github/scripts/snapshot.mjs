@@ -344,30 +344,42 @@ async function resolveUsernameToId(username) {
 }
 
 async function fetchCollection(userId) {
-    const collections = ['Pets', 'Pet', 'pets', 'Inventory', 'Normal', 'Huge', 'All'];
-    const patterns = [
-        uid => `${API_BASE}/api/collection/${uid}?collection=Pets`,
-        uid => `${API_BASE}/api/collection/${uid}?type=Pets`,
-        ...collections.map(c => uid => `${API_BASE}/api/collection/${c}/${uid}`),
-        uid => `${API_BASE}/api/exists/${uid}`,
-        uid => `${API_BASE}/api/RAP/${uid}`,
-    ];
-    for (const mkUrl of patterns) {
-        const url = mkUrl(userId);
+    const url = `${API_BASE}/v1/players/${userId}?include=inventory`;
+    for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+            const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
             const text = await res.text();
-            const preview = text.slice(0, 300);
-            console.log(`  ${url} → ${res.status} body: ${preview}`);
-            if (!res.ok) continue;
-            let json;
-            try { json = JSON.parse(text); } catch (_) { continue; }
-            if (json.status === 'ok' && json.data && Array.isArray(json.data)) return json.data;
-            if (json.status === 'ok' && json.data) {
-                console.log(`  ^ Found data (type=${typeof json.data}, keys=${Object.keys(json.data).slice(0,10)})`);
+            if (!res.ok) {
+                console.log(`  ${url} → ${res.status} body: ${text.slice(0, 200)}`);
+                if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
+                return null;
             }
+            let json;
+            try { json = JSON.parse(text); } catch (_) {
+                console.log(`  ${url} → invalid JSON`);
+                return null;
+            }
+            if (json.status !== 'ok' || !json.data) {
+                console.log(`  ${url} → status: ${json.status}`);
+                return null;
+            }
+            const invView = json.data.views?.inventory;
+            if (!invView || !invView.available) {
+                const reason = invView?.reason || 'unknown';
+                console.log(`  Inventory not available for ${userId}: ${reason}`);
+                console.log(`  publicViews: ${JSON.stringify(json.data.account?.publicViews || {})}`);
+                return null;
+            }
+            const items = invView.data?.items;
+            if (!Array.isArray(items)) {
+                console.log(`  Inventory data missing items array. Keys: ${Object.keys(invView.data || {})}`);
+                return null;
+            }
+            console.log(`  Fetched inventory: ${items.length} items (stale=${invView.isStale || false})`);
+            return items;
         } catch (err) {
             console.log(`  ${url} → error: ${err.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
         }
     }
     return null;
@@ -390,27 +402,32 @@ for (const track of COLLECTION_TRACK) {
     const displayName = user.displayName;
     console.log(`Collection tracking: ${displayName} (${uid})`);
 
-    const collection = await fetchCollection(user.id);
-    if (!collection) {
-        console.log(`  Could not fetch collection for ${displayName}`);
+    const items = await fetchCollection(user.id);
+    if (!items) {
+        console.log(`  Could not fetch inventory for ${displayName}`);
         continue;
     }
 
-    const totalPets = collection.reduce((sum, pet) => sum + (pet.count || 1), 0);
-    const uniquePets = collection.length;
+    const pets = items.filter(i => i.class === 'Pet');
+    const totalPets = pets.reduce((sum, p) => sum + (p.count || 1), 0);
+    const uniquePets = pets.length;
 
     const watchSummary = [];
     for (const petName of (track.watchPets || [])) {
         const nameLower = petName.toLowerCase();
-        const matches = collection.filter(p => (p.id || '').toLowerCase().includes(nameLower));
+        const matches = pets.filter(p =>
+            (p.displayName || '').toLowerCase().includes(nameLower) ||
+            (p.id || '').toLowerCase().includes(nameLower)
+        );
         const totalCount = matches.reduce((sum, p) => sum + (p.count || 1), 0);
         const variants = matches.map(p => {
             const tags = [];
-            if (p.sh) tags.push('Shiny');
-            if (p.pt === 2) tags.push('Gold');
-            if (p.pt === 3) tags.push('Rainbow');
+            const rd = p.rawData || {};
+            if (rd.sh) tags.push('Shiny');
+            if (rd.pt === 1) tags.push('Golden');
+            if (rd.pt === 2) tags.push('Rainbow');
             const label = tags.length ? ` (${tags.join(', ')})` : '';
-            return { label: `${p.id}${label}`, count: p.count || 1 };
+            return { label: `${p.displayName || p.id}${label}`, count: p.count || 1 };
         });
         watchSummary.push({ name: petName, total: totalCount, variants });
         const variantText = variants.map(v => `${v.label} x${v.count}`).join(', ');
