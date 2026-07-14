@@ -352,47 +352,49 @@ async function fetchPlayerInventory(slug) {
             if (!res.ok) {
                 console.log(`  ${url} → ${res.status} body: ${text.slice(0, 200)}`);
                 if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
-                return null;
+                return { items: null, reason: 'player_not_found' };
             }
             let json;
             try { json = JSON.parse(text); } catch (_) {
                 console.log(`  ${url} → invalid JSON`);
-                return null;
+                return { items: null, reason: 'api_error' };
             }
             if (json.status !== 'ok' || !json.data) {
                 console.log(`  ${url} → status: ${json.status}`);
-                return null;
+                return { items: null, reason: 'api_error' };
             }
             const invView = json.data.views?.inventory;
             if (!invView || !invView.available) {
                 const reason = invView?.reason || 'unknown';
                 console.log(`  Inventory not available for ${slug}: ${reason}`);
                 console.log(`  publicViews: ${JSON.stringify(json.data.account?.publicViews || {})}`);
-                return null;
+                return { items: null, reason };
             }
             const items = invView.data?.items;
             if (!Array.isArray(items)) {
                 console.log(`  Inventory data missing items array. Keys: ${Object.keys(invView.data || {})}`);
-                return null;
+                return { items: null, reason: 'no_items' };
             }
             console.log(`  Fetched inventory: ${items.length} items (stale=${invView.isStale || false})`);
-            return items;
+            return { items, reason: null };
         } catch (err) {
             console.log(`  ${url} → error: ${err.message}`);
             if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
         }
     }
-    return null;
+    return { items: null, reason: 'network_error' };
 }
 
 async function fetchCollection(userId, username) {
     const result = await fetchPlayerInventory(userId);
-    if (result) return result;
+    if (result.items) return result;
     if (username) {
         console.log(`  Retrying with username slug: ${username}`);
-        return fetchPlayerInventory(username);
+        const result2 = await fetchPlayerInventory(username);
+        if (result2.items) return result2;
+        return result2.reason !== 'player_not_found' ? result2 : result;
     }
-    return null;
+    return result;
 }
 
 let collectionState = {};
@@ -412,11 +414,28 @@ for (const track of COLLECTION_TRACK) {
     const displayName = user.displayName;
     console.log(`Collection tracking: ${displayName} (${uid})`);
 
-    const items = await fetchCollection(user.id, track.username);
-    if (!items) {
-        console.log(`  Could not fetch inventory for ${displayName}`);
+    const fetchResult = await fetchCollection(user.id, track.username);
+    if (!fetchResult.items) {
+        const reasonText = {
+            no_recent_data: 'Linked but needs to open PS99 to refresh data',
+            not_public: 'Inventory not set to public',
+            player_not_found: 'Account not linked on db.biggames.io',
+        }[fetchResult.reason] || fetchResult.reason;
+        console.log(`  Could not fetch inventory for ${displayName}: ${reasonText}`);
+        collectionDisplay.push({
+            username: track.username,
+            displayName,
+            userId: user.id,
+            totalPets: 0,
+            uniquePets: 0,
+            diff: 0,
+            watchPets: [],
+            ts: now,
+            status: reasonText,
+        });
         continue;
     }
+    const items = fetchResult.items;
 
     const pets = items.filter(i => i.class === 'Pet');
     const totalPets = pets.reduce((sum, p) => sum + (p.count || 1), 0);

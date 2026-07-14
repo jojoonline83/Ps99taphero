@@ -53,6 +53,10 @@ function renderPlayers() {
                 </div>`;
         }).join('');
 
+        const statusBanner = player.status
+            ? `<div style="background:#2d1b00;border:1px solid #b45309;color:#fbbf24;padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px">⚠️ ${esc(player.status)}</div>`
+            : '';
+
         return `
             <div class="player-card">
                 <div class="player-card-header">
@@ -62,6 +66,7 @@ function renderPlayers() {
                         <span class="uid">User ID: ${player.userId}</span>
                     </div>
                 </div>
+                ${statusBanner}
                 <div class="pet-stats">
                     <div class="pet-stat">
                         <span class="pet-stat-value">${fmt(player.totalPets)}</span>
