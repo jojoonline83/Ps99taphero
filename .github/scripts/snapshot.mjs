@@ -343,8 +343,8 @@ async function resolveUsernameToId(username) {
     return null;
 }
 
-async function fetchCollection(userId) {
-    const url = `${API_BASE}/v1/players/${userId}?include=inventory`;
+async function fetchPlayerInventory(slug) {
+    const url = `${API_BASE}/v1/players/${slug}?include=inventory`;
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
@@ -366,7 +366,7 @@ async function fetchCollection(userId) {
             const invView = json.data.views?.inventory;
             if (!invView || !invView.available) {
                 const reason = invView?.reason || 'unknown';
-                console.log(`  Inventory not available for ${userId}: ${reason}`);
+                console.log(`  Inventory not available for ${slug}: ${reason}`);
                 console.log(`  publicViews: ${JSON.stringify(json.data.account?.publicViews || {})}`);
                 return null;
             }
@@ -381,6 +381,16 @@ async function fetchCollection(userId) {
             console.log(`  ${url} → error: ${err.message}`);
             if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
         }
+    }
+    return null;
+}
+
+async function fetchCollection(userId, username) {
+    const result = await fetchPlayerInventory(userId);
+    if (result) return result;
+    if (username) {
+        console.log(`  Retrying with username slug: ${username}`);
+        return fetchPlayerInventory(username);
     }
     return null;
 }
@@ -402,7 +412,7 @@ for (const track of COLLECTION_TRACK) {
     const displayName = user.displayName;
     console.log(`Collection tracking: ${displayName} (${uid})`);
 
-    const items = await fetchCollection(user.id);
+    const items = await fetchCollection(user.id, track.username);
     if (!items) {
         console.log(`  Could not fetch inventory for ${displayName}`);
         continue;
