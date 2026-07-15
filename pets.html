@@ -284,17 +284,21 @@
 
 <div class="setup-overlay" id="setup-overlay">
     <div class="setup-panel">
-        <h3>Connect to GitHub</h3>
+        <h3>One-Time Setup</h3>
         <div class="setup-step">
             <span class="setup-step-num">1</span>
-            <div>Click below to create a token (select only <b>Contents → Read and write</b>):<br>
-                <a class="setup-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank">Create Token on GitHub</a>
+            <div>Click this button — it opens GitHub with everything pre-filled:<br>
+                <a class="setup-link" href="https://github.com/settings/tokens/new?description=PS99+Hatching+Toggle&scopes=repo" target="_blank">Generate Token</a>
             </div>
         </div>
         <div class="setup-step">
             <span class="setup-step-num">2</span>
-            <div>Copy the token and paste it here:
-                <input type="password" class="setup-input" id="token-input" placeholder="github_pat_...">
+            <div>Scroll down and click the green <b>"Generate token"</b> button on that page.</div>
+        </div>
+        <div class="setup-step">
+            <span class="setup-step-num">3</span>
+            <div>Copy the token shown (starts with <b>ghp_</b>) and paste here:
+                <input type="password" class="setup-input" id="token-input" placeholder="ghp_xxxxxxxxxxxx">
                 <div class="setup-error" id="setup-error"></div>
             </div>
         </div>
@@ -303,7 +307,7 @@
             <button class="btn-save" id="save-btn" onclick="saveToken()">Connect</button>
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text-muted)">
-            Token is stored only in your browser. One-time setup.
+            Stored in your browser only. You only do this once.
         </div>
     </div>
 </div>
