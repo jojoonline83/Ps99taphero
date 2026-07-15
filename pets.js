@@ -1,6 +1,7 @@
 'use strict';
 
 let collectionData = [];
+let hatchingConfig = {};
 
 function esc(str) {
     const d = document.createElement('div');
@@ -19,6 +20,8 @@ function toast(msg, type = 'success') {
     toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 
+const TOGGLE_URL = 'https://github.com/jojoonline83/Ps99taphero/actions/workflows/toggle-hatching.yml';
+
 function renderPlayers() {
     const badge = document.getElementById('pet-status-badge');
     const container = document.getElementById('players-container');
@@ -35,6 +38,12 @@ function renderPlayers() {
     container.innerHTML = collectionData.map(player => {
         const diffClass = player.diff > 0 ? 'positive' : 'zero';
         const diffText = player.diff > 0 ? `+${fmt(player.diff)}` : player.diff === 0 ? '0' : fmt(player.diff);
+
+        const username = player.username || '';
+        const isHatching = username && hatchingConfig[username] === true;
+        const hatchBadge = username
+            ? `<a href="${TOGGLE_URL}" target="_blank" class="${isHatching ? 'hatching-on' : 'hatching-off'}" title="Click to toggle hatching for ${esc(username)} via GitHub Actions">${isHatching ? '🥚 Hatching' : '🥚 Off'}</a>`
+            : '';
 
         const watchPetsSections = (player.watchPets || []).map(wp => {
             const variantRows = wp.variants.length
@@ -61,8 +70,11 @@ function renderPlayers() {
             <div class="player-card">
                 <div class="player-card-header">
                     <div class="team-detail-color-bar" style="background:var(--accent);width:6px;height:48px;border-radius:3px;flex-shrink:0"></div>
-                    <div>
-                        <h2>${esc(player.displayName)}</h2>
+                    <div style="flex:1">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <h2>${esc(player.displayName)}</h2>
+                            ${hatchBadge}
+                        </div>
                         <span class="uid">User ID: ${player.userId}</span>
                     </div>
                 </div>
@@ -99,17 +111,19 @@ async function loadCollection() {
 }
 
 async function loadHatchingStatus() {
-    const badge = document.getElementById('hatching-badge');
-    if (!badge) return;
     try {
         const res = await fetch(`.github/monitor-data/tracking_config.json?t=${Date.now()}`, { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error();
         const cfg = await res.json();
-        const on = cfg.hatching === true;
-        const toggleUrl = 'https://github.com/jojoonline83/Ps99taphero/actions/workflows/toggle-hatching.yml';
-        badge.innerHTML = `<a href="${toggleUrl}" target="_blank" class="${on ? 'hatching-on' : 'hatching-off'}" title="Click to toggle hatching tracker via GitHub Actions">${on ? '🥚 Hatching ON' : '🥚 Hatching OFF'}</a>`;
+        if (typeof cfg.hatching === 'object' && cfg.hatching !== null) {
+            hatchingConfig = cfg.hatching;
+        } else if (cfg.hatching === true) {
+            hatchingConfig = { avocardorable99: true, jjlovegame99: true };
+        } else {
+            hatchingConfig = {};
+        }
     } catch {
-        badge.innerHTML = '';
+        hatchingConfig = {};
     }
 }
 

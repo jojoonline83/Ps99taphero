@@ -28,11 +28,21 @@ const COLLECTION_STATE_FILE   = `${MONITOR_DIR}/collection_state.json`;
 const AUTH_CALL_STATE_FILE    = `${MONITOR_DIR}/auth_call_state.json`;
 const TRACKING_CONFIG_FILE    = `${MONITOR_DIR}/tracking_config.json`;
 
-let trackingConfig = { hatching: false };
+let trackingConfig = { hatching: {} };
 if (existsSync(TRACKING_CONFIG_FILE)) {
-    try { trackingConfig = JSON.parse(readFileSync(TRACKING_CONFIG_FILE, 'utf8')); } catch (_) {}
+    try {
+        const raw = JSON.parse(readFileSync(TRACKING_CONFIG_FILE, 'utf8'));
+        if (typeof raw.hatching === 'boolean') {
+            const global = raw.hatching;
+            trackingConfig.hatching = {};
+            for (const t of COLLECTION_TRACK) trackingConfig.hatching[t.username] = global;
+        } else {
+            trackingConfig = raw;
+        }
+    } catch (_) {}
 }
-console.log(`Hatching tracker: ${trackingConfig.hatching ? 'ON — using auth refresh quota' : 'OFF — public endpoint only'}`);
+const activeHatchers = Object.entries(trackingConfig.hatching || {}).filter(([,v]) => v).map(([k]) => k);
+console.log(`Hatching tracker: ${activeHatchers.length ? activeHatchers.join(', ') + ' ON' : 'ALL OFF — public endpoint only'}`);
 
 function webhookUrls() {
     return (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -461,7 +471,8 @@ async function fetchCollection(userId, username) {
     const authKey = username || String(userId);
     const state = authCallState[authKey] || {};
 
-    if (token && trackingConfig.hatching) {
+    const isHatching = username && trackingConfig.hatching && trackingConfig.hatching[username];
+    if (token && isHatching) {
         const now = Date.now();
         const quotaExhausted = state.quotaExhausted || false;
         const nextEligible = state.nextRefreshEligibleAt ? new Date(state.nextRefreshEligibleAt).getTime() : 0;

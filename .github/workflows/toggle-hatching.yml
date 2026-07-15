@@ -3,6 +3,14 @@ name: Toggle Hatching Tracker
 on:
   workflow_dispatch:
     inputs:
+      player:
+        description: 'Player to toggle'
+        required: true
+        type: choice
+        options:
+          - 'avocardorable99'
+          - 'jjlovegame99'
+          - 'all'
       enable:
         description: 'Enable hatching tracker (true/false)'
         required: true
@@ -22,8 +30,22 @@ jobs:
 
       - name: Update tracking config
         run: |
-          echo '{"hatching":${{ inputs.enable }}}' > .github/monitor-data/tracking_config.json
-          cat .github/monitor-data/tracking_config.json
+          CONFIG=.github/monitor-data/tracking_config.json
+          if [ "${{ inputs.player }}" = "all" ]; then
+            cat <<EOJSON > "$CONFIG"
+          {"hatching":{"avocardorable99":${{ inputs.enable }},"jjlovegame99":${{ inputs.enable }}}}
+          EOJSON
+          else
+            # Read current config and update single player
+            node -e "
+              const fs = require('fs');
+              const cfg = JSON.parse(fs.readFileSync('$CONFIG','utf8'));
+              if (typeof cfg.hatching !== 'object' || cfg.hatching === null) cfg.hatching = {};
+              cfg.hatching['${{ inputs.player }}'] = ${{ inputs.enable }};
+              fs.writeFileSync('$CONFIG', JSON.stringify(cfg));
+            "
+          fi
+          cat "$CONFIG"
 
       - name: Commit and push
         run: |
@@ -31,5 +53,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/monitor-data/tracking_config.json
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "chore: toggle hatching tracker to ${{ inputs.enable }}"
+          git commit -m "chore: toggle hatching for ${{ inputs.player }} to ${{ inputs.enable }}"
           git push
