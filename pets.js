@@ -27,53 +27,87 @@ function toast(msg, type = 'success') {
 
 function getToken() { return localStorage.getItem('ps99_gh_token') || ''; }
 
-function setupToken() {
-    const current = getToken();
-    const token = prompt(
-        'Enter a GitHub Personal Access Token with "contents: write" scope.\n' +
-        'This is stored only in your browser (localStorage).\n\n' +
-        (current ? 'Current: ****' + current.slice(-4) + '\nLeave blank to clear.' : 'No token set.'),
-        ''
-    );
-    if (token === null) return;
-    if (token === '') {
-        localStorage.removeItem('ps99_gh_token');
-        toast('Token cleared', 'success');
-    } else {
-        localStorage.setItem('ps99_gh_token', token.trim());
-        toast('Token saved', 'success');
-    }
-    updateTokenLink();
+function showSetup() {
+    document.getElementById('setup-overlay').classList.add('show');
+    document.getElementById('token-input').value = '';
+    document.getElementById('setup-error').style.display = 'none';
+    document.getElementById('token-input').focus();
 }
 
-function updateTokenLink() {
-    const el = document.getElementById('token-link');
-    if (!el) return;
+function hideSetup() {
+    document.getElementById('setup-overlay').classList.remove('show');
+}
+
+async function saveToken() {
+    const input = document.getElementById('token-input');
+    const errorEl = document.getElementById('setup-error');
+    const saveBtn = document.getElementById('save-btn');
+    const token = input.value.trim();
+
+    if (!token) {
+        errorEl.textContent = 'Please paste your token';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Verifying...';
+    errorEl.style.display = 'none';
+
+    try {
+        const res = await fetch(`${GH_API}/repos/${REPO_OWNER}/${REPO_NAME}/contents/${CONFIG_PATH}`, {
+            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' },
+        });
+        if (res.status === 401 || res.status === 403) throw new Error('Token rejected — check permissions');
+        if (res.status === 404) throw new Error('Token needs Contents read/write access');
+        if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+
+        localStorage.setItem('ps99_gh_token', token);
+        updateSettingsBtn();
+        hideSetup();
+        toast('Connected to GitHub', 'success');
+    } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.style.display = 'block';
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Connect';
+    }
+}
+
+function updateSettingsBtn() {
+    const btn = document.getElementById('settings-btn');
+    if (!btn) return;
     const has = !!getToken();
-    el.textContent = has ? 'Token ✓' : 'Set Token';
-    el.style.color = has ? 'var(--success)' : '';
+    btn.classList.toggle('connected', has);
+    btn.title = has ? 'Connected — click to update token' : 'Set up GitHub connection';
 }
 
 async function toggleHatching(username) {
-    const token = getToken();
-    if (!token) {
-        setupToken();
-        if (!getToken()) return;
+    if (!getToken()) {
+        showSetup();
+        return;
     }
 
-    const btn = document.querySelector(`[data-hatch-user="${username}"]`);
-    if (btn) { btn.disabled = true; btn.classList.add('pending'); btn.textContent = '...'; }
+    const sw = document.querySelector(`[data-hatch="${username}"]`);
+    if (sw) { sw.disabled = true; }
 
     try {
         const getRes = await fetch(`${GH_API}/repos/${REPO_OWNER}/${REPO_NAME}/contents/${CONFIG_PATH}`, {
             headers: { 'Authorization': `token ${getToken()}`, 'Accept': 'application/vnd.github.v3+json' },
         });
-        if (!getRes.ok) throw new Error(getRes.status === 401 ? 'Bad token — update via Set Token' : `GitHub API error ${getRes.status}`);
+        if (getRes.status === 401) {
+            localStorage.removeItem('ps99_gh_token');
+            updateSettingsBtn();
+            toast('Token expired — reconnect via gear icon', 'error');
+            return;
+        }
+        if (!getRes.ok) throw new Error(`GitHub error ${getRes.status}`);
 
         const fileData = await getRes.json();
         const content = JSON.parse(atob(fileData.content));
-
         if (typeof content.hatching !== 'object' || content.hatching === null) content.hatching = {};
+
         const newState = !content.hatching[username];
         content.hatching[username] = newState;
 
@@ -96,17 +130,17 @@ async function toggleHatching(username) {
         }
 
         hatchingConfig[username] = newState;
-        toast(`${username} hatching ${newState ? 'ON' : 'OFF'}`, 'success');
-        renderPlayers();
+        toast(`${newState ? 'Hatching ON' : 'Hatching OFF'} for ${username}`, 'success');
     } catch (err) {
         toast(err.message, 'error');
-        renderPlayers();
     }
+    renderPlayers();
 }
 
-// Expose to onclick
 window.toggleHatching = toggleHatching;
-window.setupToken = setupToken;
+window.showSetup = showSetup;
+window.hideSetup = hideSetup;
+window.saveToken = saveToken;
 
 function renderPlayers() {
     const badge = document.getElementById('pet-status-badge');
@@ -126,9 +160,12 @@ function renderPlayers() {
         const diffText = player.diff > 0 ? `+${fmt(player.diff)}` : player.diff === 0 ? '0' : fmt(player.diff);
 
         const username = player.username || '';
-        const isHatching = username && hatchingConfig[username] === true;
-        const hatchBadge = username
-            ? `<button class="hatching-btn ${isHatching ? 'on' : 'off'}" data-hatch-user="${esc(username)}" onclick="toggleHatching('${esc(username)}')">${isHatching ? 'Hatching ON' : 'Hatching OFF'}</button>`
+        const isOn = username && hatchingConfig[username] === true;
+        const toggle = username
+            ? `<div class="hatch-toggle">
+                   <button class="hatch-switch ${isOn ? 'on' : ''}" data-hatch="${esc(username)}" onclick="toggleHatching('${esc(username)}')" title="Toggle hatching refresh"></button>
+                   <span class="hatch-label ${isOn ? 'on' : ''}">${isOn ? 'Hatching' : 'Off'}</span>
+               </div>`
             : '';
 
         const watchPetsSections = (player.watchPets || []).map(wp => {
@@ -157,9 +194,9 @@ function renderPlayers() {
                 <div class="player-card-header">
                     <div class="team-detail-color-bar" style="background:var(--accent);width:6px;height:48px;border-radius:3px;flex-shrink:0"></div>
                     <div style="flex:1">
-                        <div style="display:flex;align-items:center;gap:10px">
+                        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
                             <h2>${esc(player.displayName)}</h2>
-                            ${hatchBadge}
+                            ${toggle}
                         </div>
                         <span class="uid">User ID: ${player.userId}</span>
                     </div>
@@ -227,7 +264,10 @@ async function refreshAll({ silent = false } = {}) {
     }
 }
 
-updateTokenLink();
+updateSettingsBtn();
 document.getElementById('refresh-btn').addEventListener('click', () => refreshAll({ silent: false }));
+document.getElementById('setup-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) hideSetup();
+});
 setInterval(() => refreshAll({ silent: true }), 10 * 60_000);
 refreshAll({ silent: false });

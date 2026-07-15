@@ -98,30 +98,156 @@
             font-weight: 600;
         }
         .nav-link:hover { text-decoration: underline; }
-        .hatching-btn {
-            padding: 5px 12px;
+
+        /* Hatching toggle switch */
+        .hatch-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .hatch-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #333;
             border-radius: 12px;
+            cursor: pointer;
+            transition: background .2s;
+            border: none;
+            padding: 0;
+            flex-shrink: 0;
+        }
+        .hatch-switch::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 18px;
+            height: 18px;
+            background: #888;
+            border-radius: 50%;
+            transition: transform .2s, background .2s;
+        }
+        .hatch-switch.on { background: #065f46; }
+        .hatch-switch.on::after { transform: translateX(20px); background: #34d399; }
+        .hatch-switch:disabled { opacity: .5; cursor: wait; }
+        .hatch-label {
             font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: .5px;
-            cursor: pointer;
+            color: var(--text-muted);
+        }
+        .hatch-label.on { color: #34d399; }
+
+        /* Token setup panel */
+        .setup-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .setup-overlay.show { display: flex; }
+        .setup-panel {
+            background: var(--bg-card, #1a1a2e);
+            border: 1px solid var(--border, #333);
+            border-radius: 16px;
+            padding: 28px 32px;
+            max-width: 420px;
+            width: 90%;
+        }
+        .setup-panel h3 {
+            font-size: 18px;
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+        .setup-step {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-secondary, #aaa);
+        }
+        .setup-step-num {
+            background: var(--accent, #6366f1);
+            color: #fff;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 800;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+        .setup-link {
+            display: inline-block;
+            background: var(--accent, #6366f1);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 700;
+            margin: 4px 0 8px;
+        }
+        .setup-link:hover { opacity: .85; }
+        .setup-input {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border, #333);
+            background: var(--bg-secondary, #111);
+            color: var(--text-primary, #eee);
+            font-size: 13px;
+            font-family: monospace;
+            margin: 6px 0;
+            box-sizing: border-box;
+        }
+        .setup-input::placeholder { color: #555; }
+        .setup-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        .setup-actions button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
             border: none;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-save { background: var(--accent, #6366f1); color: #fff; }
+        .btn-save:hover { opacity: .85; }
+        .btn-cancel { background: var(--bg-secondary, #222); color: var(--text-muted, #888); border: 1px solid var(--border, #333) !important; }
+        .setup-error {
+            color: #f87171;
+            font-size: 12px;
+            margin-top: 6px;
+            display: none;
+        }
+
+        /* Settings gear */
+        .settings-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 16px;
+            padding: 4px;
+            opacity: .6;
             transition: opacity .15s;
         }
-        .hatching-btn:hover { opacity: .8; }
-        .hatching-btn:disabled { opacity: .5; cursor: wait; }
-        .hatching-btn.on { background: #065f46; color: #34d399; border: 1px solid #059669; }
-        .hatching-btn.off { background: #1e1e1e; color: #888; border: 1px solid #333; }
-        .hatching-btn.pending { background: #78350f; color: #fbbf24; border: 1px solid #b45309; }
-        .token-setup {
-            display: inline-block;
-            color: var(--text-muted);
-            font-size: 11px;
-            cursor: pointer;
-            text-decoration: underline;
-        }
-        .token-setup:hover { color: var(--accent); }
+        .settings-btn:hover { opacity: 1; }
+        .settings-btn.connected { color: var(--success, #34d399); opacity: .8; }
     </style>
 </head>
 <body>
@@ -135,7 +261,7 @@
         <div style="display:flex;align-items:center;gap:10px">
             <a href="index.html" class="nav-link">Leaderboard</a>
             <span id="pet-status-badge"></span>
-            <span id="token-link" class="token-setup" onclick="setupToken()">Set Token</span>
+            <button class="settings-btn" id="settings-btn" onclick="showSetup()" title="Connection settings">⚙</button>
             <button class="btn-refresh" id="refresh-btn">Refresh</button>
         </div>
     </div>
@@ -156,6 +282,32 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="pets.js?v=1"></script>
+<div class="setup-overlay" id="setup-overlay">
+    <div class="setup-panel">
+        <h3>Connect to GitHub</h3>
+        <div class="setup-step">
+            <span class="setup-step-num">1</span>
+            <div>Click below to create a token (select only <b>Contents → Read and write</b>):<br>
+                <a class="setup-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank">Create Token on GitHub</a>
+            </div>
+        </div>
+        <div class="setup-step">
+            <span class="setup-step-num">2</span>
+            <div>Copy the token and paste it here:
+                <input type="password" class="setup-input" id="token-input" placeholder="github_pat_...">
+                <div class="setup-error" id="setup-error"></div>
+            </div>
+        </div>
+        <div class="setup-actions">
+            <button class="btn-cancel" onclick="hideSetup()">Cancel</button>
+            <button class="btn-save" id="save-btn" onclick="saveToken()">Connect</button>
+        </div>
+        <div style="margin-top:12px;font-size:11px;color:var(--text-muted)">
+            Token is stored only in your browser. One-time setup.
+        </div>
+    </div>
+</div>
+
+<script src="pets.js?v=2"></script>
 </body>
 </html>
