@@ -98,33 +98,30 @@
             font-weight: 600;
         }
         .nav-link:hover { text-decoration: underline; }
-        .hatching-on {
-            background: #065f46;
-            color: #34d399;
-            border: 1px solid #059669;
-            padding: 4px 10px;
+        .hatching-btn {
+            padding: 5px 12px;
             border-radius: 12px;
             font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: .5px;
             cursor: pointer;
-            text-decoration: none;
+            border: none;
+            transition: opacity .15s;
         }
-        .hatching-off {
-            background: #1e1e1e;
-            color: #888;
-            border: 1px solid #333;
-            padding: 4px 10px;
-            border-radius: 12px;
+        .hatching-btn:hover { opacity: .8; }
+        .hatching-btn:disabled { opacity: .5; cursor: wait; }
+        .hatching-btn.on { background: #065f46; color: #34d399; border: 1px solid #059669; }
+        .hatching-btn.off { background: #1e1e1e; color: #888; border: 1px solid #333; }
+        .hatching-btn.pending { background: #78350f; color: #fbbf24; border: 1px solid #b45309; }
+        .token-setup {
+            display: inline-block;
+            color: var(--text-muted);
             font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: .5px;
             cursor: pointer;
-            text-decoration: none;
+            text-decoration: underline;
         }
-        .hatching-on:hover, .hatching-off:hover { opacity: .8; }
+        .token-setup:hover { color: var(--accent); }
     </style>
 </head>
 <body>
@@ -138,6 +135,7 @@
         <div style="display:flex;align-items:center;gap:10px">
             <a href="index.html" class="nav-link">Leaderboard</a>
             <span id="pet-status-badge"></span>
+            <span id="token-link" class="token-setup" onclick="setupToken()">Set Token</span>
             <button class="btn-refresh" id="refresh-btn">Refresh</button>
         </div>
     </div>
