@@ -21,7 +21,6 @@ const COLLECTION_TRACK = [
 ];
 const COLLECTION_STALL_TIERS = [20, 40, 60];
 
-const AUTH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
 const MONITOR_DIR             = '.github/monitor-data';
 const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
@@ -346,8 +345,8 @@ async function resolveUsernameToId(username) {
     return null;
 }
 
-async function fetchAuthenticatedInventory(token) {
-    const url = `${API_BASE}/v1/account/inventory`;
+async function fetchAuthenticatedInventory(token, forceRefresh = false) {
+    const url = `${API_BASE}/v1/account/inventory${forceRefresh ? '?refresh=true' : ''}`;
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const res = await fetch(url, {
@@ -357,33 +356,46 @@ async function fetchAuthenticatedInventory(token) {
             const text = await res.text();
             if (res.status === 401 || res.status === 403) {
                 console.log(`  Auth inventory: ${res.status} — token expired or revoked`);
-                return { items: null, reason: 'token_expired' };
+                return { items: null, reason: 'token_expired', refresh: null };
             }
             if (!res.ok) {
                 console.log(`  Auth inventory: ${res.status} body: ${text.slice(0, 200)}`);
                 if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
-                return { items: null, reason: 'api_error' };
+                return { items: null, reason: 'api_error', refresh: null };
             }
             let json;
             try { json = JSON.parse(text); } catch (_) {
-                return { items: null, reason: 'api_error' };
+                return { items: null, reason: 'api_error', refresh: null };
             }
             if (json.status !== 'ok' || !json.data) {
-                return { items: null, reason: 'api_error' };
+                return { items: null, reason: 'api_error', refresh: null };
             }
             const items = json.data.items;
+            const refresh = json.data.refresh || null;
             if (!Array.isArray(items)) {
                 console.log(`  Auth inventory: no items array. Keys: ${Object.keys(json.data || {})}`);
-                return { items: null, reason: 'no_items' };
+                return { items: null, reason: 'no_items', refresh };
             }
-            console.log(`  Auth inventory: ${items.length} items (triggers snapshot refresh)`);
-            return { items, reason: null };
+            if (refresh) {
+                const consumed = refresh.consumedThisCall ? 'YES' : 'no';
+                const skipped = refresh.skipped || 'n/a';
+                console.log(`  Auth inventory: ${items.length} items | quota ${refresh.used}/${refresh.limit} | consumed: ${consumed} | skipped: ${skipped}`);
+                if (refresh.quotaExhausted) {
+                    console.log(`  ⚠ Quota exhausted — no more fresh snapshots until ${refresh.resetsAt}`);
+                }
+                if (refresh.nextRefreshEligibleAt) {
+                    console.log(`  Next refresh eligible: ${refresh.nextRefreshEligibleAt}`);
+                }
+            } else {
+                console.log(`  Auth inventory: ${items.length} items (no refresh info in response)`);
+            }
+            return { items, reason: null, refresh };
         } catch (err) {
             console.log(`  Auth inventory error: ${err.message}`);
             if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
         }
     }
-    return { items: null, reason: 'network_error' };
+    return { items: null, reason: 'network_error', refresh: null };
 }
 
 async function fetchPlayerInventory(slug) {
@@ -440,37 +452,39 @@ if (existsSync(AUTH_CALL_STATE_FILE)) {
 async function fetchCollection(userId, username) {
     const token = username ? getTokenForUsername(username) : null;
     const authKey = username || String(userId);
-    const lastAuthCall = authCallState[authKey] || 0;
-    const authDue = Date.now() - lastAuthCall >= AUTH_REFRESH_INTERVAL_MS;
+    const state = authCallState[authKey] || {};
 
-    if (token && authDue) {
-        console.log(`  Auth refresh for ${username} (every 30min to conserve slots)...`);
-        const authResult = await fetchAuthenticatedInventory(token);
-        authCallState[authKey] = Date.now();
-        if (!authResult.items) {
-            console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
+    if (token) {
+        const now = Date.now();
+        const quotaExhausted = state.quotaExhausted || false;
+        const nextEligible = state.nextRefreshEligibleAt ? new Date(state.nextRefreshEligibleAt).getTime() : 0;
+        const isEligible = !nextEligible || now >= nextEligible;
+
+        if (quotaExhausted) {
+            const resetsAt = state.resetsAt || 'midnight UTC';
+            console.log(`  Quota exhausted (${state.used}/${state.limit}) — resets at ${resetsAt}, using public endpoint`);
+        } else if (!isEligible) {
+            const minsUntil = Math.round((nextEligible - now) / 60000);
+            console.log(`  Next refresh in ~${minsUntil}min (${state.used}/${state.limit} used), using public endpoint`);
         } else {
-            const authPets = authResult.items.filter(i => i.class === 'Pet');
-            const authTotal = authPets.reduce((s, p) => s + (p.count || 1), 0);
-            console.log(`  Auth returned ${authTotal.toLocaleString()} total pets (${authPets.length} unique)`);
-            console.log(`  Waiting 5s for server-side refresh to propagate...`);
-            await new Promise(r => setTimeout(r, 5000));
-            const pubResult = await fetchPlayerInventory(userId);
-            if (pubResult.items) {
-                const pubPets = pubResult.items.filter(i => i.class === 'Pet');
-                const pubTotal = pubPets.reduce((s, p) => s + (p.count || 1), 0);
-                console.log(`  Public returned ${pubTotal.toLocaleString()} total pets (${pubPets.length} unique)`);
-                if (pubTotal !== authTotal) {
-                    console.log(`  Data differs! Using public (newer) data`);
-                    return pubResult;
-                }
-                console.log(`  Auth & public match — using auth data`);
+            console.log(`  Requesting fresh snapshot (${state.used || 0}/${state.limit || '?'} used)...`);
+            const authResult = await fetchAuthenticatedInventory(token, true);
+            if (authResult.refresh) {
+                authCallState[authKey] = {
+                    lastCall: now,
+                    used: authResult.refresh.used,
+                    limit: authResult.refresh.limit,
+                    quotaExhausted: authResult.refresh.quotaExhausted || false,
+                    nextRefreshEligibleAt: authResult.refresh.nextRefreshEligibleAt || null,
+                    resetsAt: authResult.refresh.resetsAt || null,
+                    consumedThisCall: authResult.refresh.consumedThisCall || false,
+                };
+            } else {
+                authCallState[authKey] = { lastCall: now };
             }
-            return authResult;
+            if (authResult.items) return authResult;
+            console.log(`  Auth failed (${authResult.reason}), falling back to public endpoint`);
         }
-    } else if (token && !authDue) {
-        const minsAgo = Math.round((Date.now() - lastAuthCall) / 60000);
-        console.log(`  Skipping auth (last ${minsAgo}min ago), using public endpoint`);
     }
 
     const result = await fetchPlayerInventory(userId);
