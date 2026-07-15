@@ -98,11 +98,26 @@ async function loadCollection() {
     }
 }
 
+async function loadHatchingStatus() {
+    const badge = document.getElementById('hatching-badge');
+    if (!badge) return;
+    try {
+        const res = await fetch(`.github/monitor-data/tracking_config.json?t=${Date.now()}`, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error();
+        const cfg = await res.json();
+        const on = cfg.hatching === true;
+        const toggleUrl = 'https://github.com/jojoonline83/Ps99taphero/actions/workflows/toggle-hatching.yml';
+        badge.innerHTML = `<a href="${toggleUrl}" target="_blank" class="${on ? 'hatching-on' : 'hatching-off'}" title="Click to toggle hatching tracker via GitHub Actions">${on ? '🥚 Hatching ON' : '🥚 Hatching OFF'}</a>`;
+    } catch {
+        badge.innerHTML = '';
+    }
+}
+
 async function refreshAll({ silent = false } = {}) {
     const btn = document.getElementById('refresh-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
     try {
-        await loadCollection();
+        await Promise.all([loadCollection(), loadHatchingStatus()]);
         renderPlayers();
         if (!silent) toast(`Loaded ${collectionData.length} player(s)`, 'success');
     } catch (err) {

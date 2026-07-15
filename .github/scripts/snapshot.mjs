@@ -26,6 +26,13 @@ const MONITOR_DIR             = '.github/monitor-data';
 const MONITOR_STATE_FILE      = `${MONITOR_DIR}/monitor_alert_state.json`;
 const COLLECTION_STATE_FILE   = `${MONITOR_DIR}/collection_state.json`;
 const AUTH_CALL_STATE_FILE    = `${MONITOR_DIR}/auth_call_state.json`;
+const TRACKING_CONFIG_FILE    = `${MONITOR_DIR}/tracking_config.json`;
+
+let trackingConfig = { hatching: false };
+if (existsSync(TRACKING_CONFIG_FILE)) {
+    try { trackingConfig = JSON.parse(readFileSync(TRACKING_CONFIG_FILE, 'utf8')); } catch (_) {}
+}
+console.log(`Hatching tracker: ${trackingConfig.hatching ? 'ON — using auth refresh quota' : 'OFF — public endpoint only'}`);
 
 function webhookUrls() {
     return (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -454,7 +461,7 @@ async function fetchCollection(userId, username) {
     const authKey = username || String(userId);
     const state = authCallState[authKey] || {};
 
-    if (token) {
+    if (token && trackingConfig.hatching) {
         const now = Date.now();
         const quotaExhausted = state.quotaExhausted || false;
         const nextEligible = state.nextRefreshEligibleAt ? new Date(state.nextRefreshEligibleAt).getTime() : 0;

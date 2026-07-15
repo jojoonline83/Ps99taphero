@@ -1,0 +1,35 @@
+name: Toggle Hatching Tracker
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable:
+        description: 'Enable hatching tracker (true/false)'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  toggle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update tracking config
+        run: |
+          echo '{"hatching":${{ inputs.enable }}}' > .github/monitor-data/tracking_config.json
+          cat .github/monitor-data/tracking_config.json
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/monitor-data/tracking_config.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: toggle hatching tracker to ${{ inputs.enable }}"
+          git push
