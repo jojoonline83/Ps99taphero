@@ -148,30 +148,31 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
-// Probe for Tap Hero leaderboard endpoints
+// Probe round 2: explore collections and alternative endpoints
 const probeUrls = [
-    `${API_BASE}/v1/collection/Rebirths/TapBattleEvent2/Leaderboard?page=1&pageSize=3`,
-    `${API_BASE}/v1/collection/Rebirths/TapBattleEvent3/Leaderboard?page=1&pageSize=3`,
-    `${API_BASE}/v1/collection/Rebirths/TapHero/Leaderboard?page=1&pageSize=3`,
-    `${API_BASE}/v1/collection/Misc/TapHero/Leaderboard?page=1&pageSize=3`,
-    `${API_BASE}/v1/collection/TapHero/Leaderboard?page=1&pageSize=3`,
-    `${API_BASE}/api/collections`,
-    `${API_BASE}/v1/collections`,
-    `${API_BASE}/api/activeEvents`,
-    `${API_BASE}/api/gameConfig`,
+    `${API_BASE}/api/collection/Rebirths`,
+    `${API_BASE}/api/collection/GuildBattles`,
+    `${API_BASE}/api/collection/Ranks`,
+    `${API_BASE}/api/rap`,
+    `${API_BASE}/api/leaderboard`,
+    `${API_BASE}/api/events`,
+    `${API_BASE}/api/activeBattle`,
+    `${API_BASE}/api/battles`,
+    `${API_BASE}/api/clanBattles`,
+    `${API_BASE}/api/clans?page=1&pageSize=3&sort=Points&sortOrder=desc&battleId=TapBattleEvent2`,
 ];
-console.log('=== PROBE: searching for Tap Hero leaderboard ===');
+console.log('=== PROBE ROUND 2 ===');
 for (const url of probeUrls) {
     try {
         const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
         const text = await res.text();
-        const short = text.slice(0, 500);
+        const short = text.slice(0, 800);
         console.log(`  ${url.replace(API_BASE, '')} → ${res.status} ${short}`);
     } catch (e) {
         console.log(`  ${url.replace(API_BASE, '')} → ERROR ${e.message}`);
     }
 }
-console.log('=== END PROBE ===\n');
+console.log('=== END PROBE 2 ===\n');
 
 // 1. Get active clan battle info to find the current battle key.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
