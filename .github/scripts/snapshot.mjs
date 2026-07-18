@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 
 const API_BASE           = 'https://ps99.biggamesapi.io';
+const API_V1             = 'https://ps99.biggamesapi.io/v1';
 const HISTORY_FILE        = 'history.json';
+const LEAGUE_HISTORY_FILE = 'league_history.json';
 const COLLECTION_FILE     = 'collection.json';
 const RESOLVED_CACHE_FILE = 'resolved_names.json';
 const RETENTION_MS       = 95 * 60 * 1000;
@@ -10,6 +12,7 @@ const PAGE_SIZE          = 100;
 const LIST_CONCURRENCY   = 10;
 const DETAIL_CONCURRENCY = 20;
 const MAX_PLAYERS        = 5000;
+const LEAGUE_TOP_PAGES   = 5;
 
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
@@ -271,7 +274,6 @@ if (needsResolve.length) {
     Object.assign(resolvedCache, resolved);
     console.log(`Resolved ${Object.keys(resolved).length}/${needsResolve.length} display names (${Object.keys(resolvedCache).length} cached).`);
 }
-writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
 // 6. Append snapshot and prune history.
 let history = [];
@@ -286,6 +288,79 @@ writeFileSync(HISTORY_FILE, JSON.stringify(history));
 
 const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(`Snapshot recorded: ${players.length} players in ${elapsedSec}s, ${history.length} snapshots retained.`);
+
+// 6b. League Part 2 snapshot (uses /v1/leagues API).
+async function snapshotLeagues() {
+    const leaguePageNums = Array.from({ length: LEAGUE_TOP_PAGES }, (_, i) => i + 1);
+    const leaguePageResults = await mapWithConcurrency(leaguePageNums, LIST_CONCURRENCY, async page => {
+        const json = await fetchJson(`${API_V1}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        return json?.data?.leagues || [];
+    });
+    const leagueSummaries = leaguePageResults.flat();
+    if (!leagueSummaries.length) {
+        console.log('League snapshot: no league data returned — skipping.');
+        return;
+    }
+
+    const leagueDetails = await mapWithConcurrency(leagueSummaries, DETAIL_CONCURRENCY, async summary => {
+        const detailJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(summary.Name)}`);
+        const detail = detailJson?.data;
+        if (!detail) {
+            return {
+                ID: summary.ID, Name: summary.Name, Points: summary.Points,
+                Members: summary.Members, MemberCapacity: summary.MemberCapacity, roster: [],
+            };
+        }
+        const contribByUser = {};
+        (detail.PointContributions || []).forEach(c => { contribByUser[c.UserID] = c.Points; });
+        const roster = [];
+        if (detail.Owner && detail.Owner.UserID) {
+            roster.push({
+                UserID: detail.Owner.UserID, DisplayName: detail.Owner.DisplayName,
+                Points: contribByUser[detail.Owner.UserID] ?? 0, Role: 'Owner',
+            });
+        }
+        (detail.Members || []).forEach(m => {
+            roster.push({
+                UserID: m.UserID, DisplayName: m.DisplayName,
+                Points: contribByUser[m.UserID] ?? 0, Role: 'Member',
+            });
+        });
+        return {
+            ID: detail.ID, Name: detail.Name, Points: detail.Points,
+            Members: roster.length, MemberCapacity: detail.MemberCapacity,
+            Level: detail.Level, roster,
+        };
+    });
+
+    // Resolve numeric-fallback display names.
+    const leagueNeedsResolve = [];
+    leagueDetails.forEach(l => l.roster.forEach(p => {
+        if (p.DisplayName === String(p.UserID)) {
+            if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; }
+            else { leagueNeedsResolve.push(p.UserID); }
+        }
+    }));
+    if (leagueNeedsResolve.length) {
+        const resolved = await resolveUsernames([...new Set(leagueNeedsResolve)]);
+        leagueDetails.forEach(l => l.roster.forEach(p => {
+            if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
+        }));
+        Object.assign(resolvedCache, resolved);
+        console.log(`League names resolved: ${Object.keys(resolved).length}/${leagueNeedsResolve.length}`);
+    }
+
+    let leagueHistory = [];
+    if (existsSync(LEAGUE_HISTORY_FILE)) {
+        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
+    }
+    leagueHistory.push({ ts: now, leagues: leagueDetails });
+    leagueHistory = leagueHistory.filter(entry => now - entry.ts <= RETENTION_MS);
+    writeFileSync(LEAGUE_HISTORY_FILE, JSON.stringify(leagueHistory));
+    console.log(`League snapshot: ${leagueDetails.length} leagues, ${leagueHistory.length} snapshots retained.`);
+}
+await snapshotLeagues();
+writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
 // 7. Player-level inactivity monitoring.
 mkdirSync(MONITOR_DIR, { recursive: true });

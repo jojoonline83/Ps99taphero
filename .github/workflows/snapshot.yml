@@ -57,7 +57,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           for i in 1 2 3 4 5; do
             node .github/scripts/snapshot.mjs || exit 0
-            git add -f history.json collection.json resolved_names.json .github/monitor-data
+            git add -f history.json league_history.json collection.json resolved_names.json .github/monitor-data
             git diff --cached --quiet && exit 0
             git commit -m "chore: snapshot tap hero leaderboard"
             git push && exit 0
