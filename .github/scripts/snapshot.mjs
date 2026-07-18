@@ -189,6 +189,28 @@ const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, 
         }
     }
 
+    // Debug: dump full battle structure for JavierPlayz's clan
+    if (name === 'o88o') {
+        console.log(`\n=== DEBUG clan o88o (JavierPlayz) ===`);
+        const battleKeys = detail.Battles ? Object.keys(detail.Battles) : [];
+        console.log(`Battle keys: ${JSON.stringify(battleKeys)}`);
+        if (detail.Battles) {
+            for (const [bk, bv] of Object.entries(detail.Battles)) {
+                const fields = Object.keys(bv);
+                console.log(`  ${bk}: fields=${JSON.stringify(fields)}, Points=${bv.Points}`);
+                if (bv.PointContributions) {
+                    const jav = bv.PointContributions.find(c => c.UserID === 3543344398);
+                    if (jav) console.log(`    JavierPlayz contrib: ${JSON.stringify(jav)}`);
+                }
+            }
+        }
+        // Show full active battle data
+        if (battleConfigName && detail.Battles?.[battleConfigName]) {
+            console.log(`Active battle full: ${JSON.stringify(detail.Battles[battleConfigName]).slice(0, 1000)}`);
+        }
+        console.log(`=== END DEBUG ===\n`);
+    }
+
     // Extract battle points from the active battle
     const battleContribs = {};
     if (battleConfigName && detail.Battles?.[battleConfigName]) {
