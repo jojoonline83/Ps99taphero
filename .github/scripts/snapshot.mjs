@@ -148,32 +148,6 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
-// Probe round 2: explore collections and alternative endpoints
-const probeUrls = [
-    `${API_BASE}/api/collection/Rebirths`,
-    `${API_BASE}/api/collection/GuildBattles`,
-    `${API_BASE}/api/collection/Ranks`,
-    `${API_BASE}/api/rap`,
-    `${API_BASE}/api/leaderboard`,
-    `${API_BASE}/api/events`,
-    `${API_BASE}/api/activeBattle`,
-    `${API_BASE}/api/battles`,
-    `${API_BASE}/api/clanBattles`,
-    `${API_BASE}/api/clans?page=1&pageSize=3&sort=Points&sortOrder=desc&battleId=TapBattleEvent2`,
-];
-console.log('=== PROBE ROUND 2 ===');
-for (const url of probeUrls) {
-    try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        const text = await res.text();
-        const short = text.slice(0, 800);
-        console.log(`  ${url.replace(API_BASE, '')} → ${res.status} ${short}`);
-    } catch (e) {
-        console.log(`  ${url.replace(API_BASE, '')} → ERROR ${e.message}`);
-    }
-}
-console.log('=== END PROBE 2 ===\n');
-
 // 1. Get active clan battle info to find the current battle key.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
 const battleData = battleInfo?.data;
@@ -213,28 +187,6 @@ const clanDetails = await mapWithConcurrency(clanSummaries, DETAIL_CONCURRENCY, 
             const b = detail.Battles[battleConfigName];
             console.log(`Active battle data: Points=${b.Points}, contributions=${b.PointContributions?.length || 0}`);
         }
-    }
-
-    // Debug: dump full battle structure for JavierPlayz's clan
-    if (name === 'o88o') {
-        console.log(`\n=== DEBUG clan o88o (JavierPlayz) ===`);
-        const battleKeys = detail.Battles ? Object.keys(detail.Battles) : [];
-        console.log(`Battle keys: ${JSON.stringify(battleKeys)}`);
-        if (detail.Battles) {
-            for (const [bk, bv] of Object.entries(detail.Battles)) {
-                const fields = Object.keys(bv);
-                console.log(`  ${bk}: fields=${JSON.stringify(fields)}, Points=${bv.Points}`);
-                if (bv.PointContributions) {
-                    const jav = bv.PointContributions.find(c => c.UserID === 3543344398);
-                    if (jav) console.log(`    JavierPlayz contrib: ${JSON.stringify(jav)}`);
-                }
-            }
-        }
-        // Show full active battle data
-        if (battleConfigName && detail.Battles?.[battleConfigName]) {
-            console.log(`Active battle full: ${JSON.stringify(detail.Battles[battleConfigName]).slice(0, 1000)}`);
-        }
-        console.log(`=== END DEBUG ===\n`);
     }
 
     // Extract battle points from the active battle
