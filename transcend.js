@@ -343,7 +343,7 @@ function clearSearch() {
 }
 
 async function loadHistory() {
-    const res = await fetch(`history.json?t=${Date.now()}`, { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(`transcend_history.json?t=${Date.now()}`, { signal: AbortSignal.timeout(30000) });
     if (res.ok) {
         const raw = await res.json();
         historyData = raw.filter(entry => Array.isArray(entry.players));

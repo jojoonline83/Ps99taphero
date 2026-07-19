@@ -413,7 +413,9 @@ async function buildTranscendFromLeagues() {
     const globalPlayerPages = Array.from({ length: 10 }, (_, i) => i + 1);
     const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
         const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        return json?.data || [];
+        if (!json?.data) return [];
+        const arr = Array.isArray(json.data) ? json.data : (json.data.players || json.data.data || []);
+        return Array.isArray(arr) ? arr : [];
     });
     let globalAdded = 0;
     for (const page of globalPageResults) {
@@ -433,16 +435,19 @@ async function buildTranscendFromLeagues() {
         }
     }
     if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
+    else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
 
-    // Fetch extra tracked players that may be outside the top 500 leagues.
-    const extraFetched = await mapWithConcurrency(
-        EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id)),
-        5,
-        async userId => {
-            const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
-            return json?.data || null;
-        }
-    );
+    // Always fetch extra tracked players individually (known-working endpoint).
+    const extraFetched = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 5, async userId => {
+        const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
+        if (!json) { console.log(`  Extra player ${userId}: API returned null`); return null; }
+        const d = json.data;
+        if (!d) { console.log(`  Extra player ${userId}: json.data is falsy, keys=${Object.keys(json)}`); return null; }
+        if (d.UserID) return d;
+        if (Array.isArray(d) && d[0]?.UserID) return d[0];
+        console.log(`  Extra player ${userId}: unexpected format, keys=${Object.keys(d)}`);
+        return null;
+    });
     let extraCount = 0;
     const extraNeedResolve = [];
     for (const p of extraFetched) {
@@ -468,30 +473,7 @@ async function buildTranscendFromLeagues() {
         }
         Object.assign(resolvedCache, resolved);
     }
-    if (extraCount) console.log(`Transcend: fetched ${extraCount} extra tracked player(s) outside top leagues.`);
-
-    // Merge players from tap hero / clan battle data (history.json).
-    let tapHeroHistory = [];
-    if (existsSync(HISTORY_FILE)) {
-        try { tapHeroHistory = JSON.parse(readFileSync(HISTORY_FILE, 'utf8')); } catch (_) { tapHeroHistory = []; }
-    }
-    if (tapHeroHistory.length) {
-        const latestTapHero = tapHeroHistory[tapHeroHistory.length - 1];
-        let tapAdded = 0;
-        for (const p of (latestTapHero.players || [])) {
-            if (!p || !p.UserID) continue;
-            if (!playerMap.has(p.UserID)) {
-                playerMap.set(p.UserID, {
-                    UserID: p.UserID,
-                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
-                    Points: p.Points || 0,
-                    Clan: p.Clan || p.Team || '—',
-                });
-                tapAdded++;
-            }
-        }
-        if (tapAdded) console.log(`Transcend: merged ${tapAdded} additional player(s) from tap hero data.`);
-    }
+    console.log(`Transcend: extra tracked players — ${extraCount} fetched, ${EXTRA_TRACKED_PLAYERS.length - extraCount} failed.`);
 
     const transcendPlayers = [...playerMap.values()]
         .sort((a, b) => b.Points - a.Points)
