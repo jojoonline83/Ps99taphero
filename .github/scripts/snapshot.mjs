@@ -158,6 +158,19 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
+// 0. Pre-fetch extra tracked players FIRST (before heavy bulk fetches exhaust rate limit).
+const prefetchedExtraPlayers = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 3, async userId => {
+    const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
+    if (!json) { console.log(`  Pre-fetch player ${userId}: API returned null`); return null; }
+    const d = json.data;
+    if (!d) { console.log(`  Pre-fetch player ${userId}: no data field, keys=${Object.keys(json)}`); return null; }
+    if (d.UserID) { console.log(`  Pre-fetch player ${userId}: OK — ${d.DisplayName}, ${d.Points} pts`); return d; }
+    if (Array.isArray(d) && d[0]?.UserID) { console.log(`  Pre-fetch player ${userId}: OK (array)`); return d[0]; }
+    console.log(`  Pre-fetch player ${userId}: unexpected format, keys=${Object.keys(d)}`);
+    return null;
+});
+console.log(`Pre-fetched ${prefetchedExtraPlayers.filter(Boolean).length}/${EXTRA_TRACKED_PLAYERS.length} extra tracked players.`);
+
 // 1. Get active clan battle info to find the current battle key.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
 const battleData = battleInfo?.data;
@@ -437,17 +450,8 @@ async function buildTranscendFromLeagues() {
     if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
     else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
 
-    // Always fetch extra tracked players individually (known-working endpoint).
-    const extraFetched = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 5, async userId => {
-        const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
-        if (!json) { console.log(`  Extra player ${userId}: API returned null`); return null; }
-        const d = json.data;
-        if (!d) { console.log(`  Extra player ${userId}: json.data is falsy, keys=${Object.keys(json)}`); return null; }
-        if (d.UserID) return d;
-        if (Array.isArray(d) && d[0]?.UserID) return d[0];
-        console.log(`  Extra player ${userId}: unexpected format, keys=${Object.keys(d)}`);
-        return null;
-    });
+    // Use pre-fetched extra tracked players (fetched at start before rate limits).
+    const extraFetched = prefetchedExtraPlayers;
     let extraCount = 0;
     const extraNeedResolve = [];
     for (const p of extraFetched) {
