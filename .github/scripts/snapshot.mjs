@@ -19,7 +19,7 @@ const LEAGUE_TOP_PAGES   = 5;
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
 // fallbackPts is used when the API returns no data (solo players not in any league).
 const EXTRA_TRACKED_PLAYERS = [
-    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 18 },
+    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 30 },
 ];
 
 // Players to always monitor for inactivity (by display name or UserID).
