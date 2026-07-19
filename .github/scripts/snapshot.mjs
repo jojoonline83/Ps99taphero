@@ -158,6 +158,13 @@ if (process.env.TEST_DISCORD_ALERT === 'true') {
 
 const startedAt = Date.now();
 
+// Shared state used by both league/transcend and tap hero sections.
+const now = Date.now();
+let resolvedCache = {};
+if (existsSync(RESOLVED_CACHE_FILE)) {
+    try { resolvedCache = JSON.parse(readFileSync(RESOLVED_CACHE_FILE, 'utf8')); } catch (_) { resolvedCache = {}; }
+}
+
 // 0. Pre-fetch extra tracked players FIRST (before heavy bulk fetches exhaust rate limit).
 const prefetchedExtraPlayers = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 3, async userId => {
     const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
@@ -170,6 +177,184 @@ const prefetchedExtraPlayers = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 3
     return null;
 });
 console.log(`Pre-fetched ${prefetchedExtraPlayers.filter(Boolean).length}/${EXTRA_TRACKED_PLAYERS.length} extra tracked players.`);
+
+// 0b. League + Transcend snapshot — run BEFORE heavy tap hero fetch to avoid rate limits.
+async function snapshotLeagues() {
+    const leaguePageNums = Array.from({ length: LEAGUE_TOP_PAGES }, (_, i) => i + 1);
+    const leaguePageResults = await mapWithConcurrency(leaguePageNums, LIST_CONCURRENCY, async page => {
+        const json = await fetchJson(`${API_V1}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        return json?.data?.leagues || [];
+    });
+    const leagueSummaries = leaguePageResults.flat();
+    if (!leagueSummaries.length) {
+        console.log('League snapshot: no league data returned — skipping.');
+        return;
+    }
+
+    const leagueDetails = await mapWithConcurrency(leagueSummaries, DETAIL_CONCURRENCY, async summary => {
+        const detailJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(summary.Name)}`);
+        const detail = detailJson?.data;
+        if (!detail) {
+            return {
+                ID: summary.ID, Name: summary.Name, Points: summary.Points,
+                Members: summary.Members, MemberCapacity: summary.MemberCapacity, roster: [],
+            };
+        }
+        const contribByUser = {};
+        (detail.PointContributions || []).forEach(c => { contribByUser[c.UserID] = c.Points; });
+        const roster = [];
+        if (detail.Owner && detail.Owner.UserID) {
+            roster.push({
+                UserID: detail.Owner.UserID, DisplayName: detail.Owner.DisplayName,
+                Points: contribByUser[detail.Owner.UserID] ?? 0, Role: 'Owner',
+            });
+        }
+        (detail.Members || []).forEach(m => {
+            roster.push({
+                UserID: m.UserID, DisplayName: m.DisplayName,
+                Points: contribByUser[m.UserID] ?? 0, Role: 'Member',
+            });
+        });
+        return {
+            ID: detail.ID, Name: detail.Name, Points: detail.Points,
+            Members: roster.length, MemberCapacity: detail.MemberCapacity,
+            Level: detail.Level, roster,
+        };
+    });
+
+    const leagueNeedsResolve = [];
+    leagueDetails.forEach(l => l.roster.forEach(p => {
+        if (p.DisplayName === String(p.UserID)) {
+            if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; }
+            else { leagueNeedsResolve.push(p.UserID); }
+        }
+    }));
+    if (leagueNeedsResolve.length) {
+        const resolved = await resolveUsernames([...new Set(leagueNeedsResolve)]);
+        leagueDetails.forEach(l => l.roster.forEach(p => {
+            if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
+        }));
+        Object.assign(resolvedCache, resolved);
+        console.log(`League names resolved: ${Object.keys(resolved).length}/${leagueNeedsResolve.length}`);
+    }
+
+    let leagueHistory = [];
+    if (existsSync(LEAGUE_HISTORY_FILE)) {
+        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
+    }
+    leagueHistory.push({ ts: now, leagues: leagueDetails });
+    leagueHistory = leagueHistory.filter(entry => now - entry.ts <= RETENTION_MS);
+    writeFileSync(LEAGUE_HISTORY_FILE, JSON.stringify(leagueHistory));
+    console.log(`League snapshot: ${leagueDetails.length} leagues, ${leagueHistory.length} snapshots retained.`);
+}
+await snapshotLeagues();
+
+async function buildTranscendFromLeagues() {
+    let leagueHistory = [];
+    if (existsSync(LEAGUE_HISTORY_FILE)) {
+        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
+    }
+    if (!leagueHistory.length) {
+        console.log('Transcend snapshot: no league data available — skipping.');
+        return;
+    }
+
+    const bestRosterByLeague = new Map();
+    for (let i = leagueHistory.length - 1; i >= 0; i--) {
+        for (const league of leagueHistory[i].leagues) {
+            if (bestRosterByLeague.has(league.Name)) continue;
+            if (league.roster && league.roster.length > 0) {
+                bestRosterByLeague.set(league.Name, league);
+            }
+        }
+    }
+
+    const playerMap = new Map();
+    for (const [, league] of bestRosterByLeague) {
+        for (const p of league.roster) {
+            const existing = playerMap.get(p.UserID);
+            if (!existing || p.Points > existing.Points) {
+                playerMap.set(p.UserID, {
+                    UserID: p.UserID,
+                    DisplayName: p.DisplayName || String(p.UserID),
+                    Points: p.Points || 0,
+                    Clan: league.Name || '—',
+                });
+            }
+        }
+    }
+
+    // Fetch top global individual contributors (includes solo players not in any league).
+    const globalPlayerPages = Array.from({ length: 10 }, (_, i) => i + 1);
+    const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
+        const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        if (!json?.data) return [];
+        const arr = Array.isArray(json.data) ? json.data : (json.data.players || json.data.data || []);
+        return Array.isArray(arr) ? arr : [];
+    });
+    let globalAdded = 0;
+    for (const page of globalPageResults) {
+        for (const p of page) {
+            if (!p || !p.UserID) continue;
+            const existing = playerMap.get(p.UserID);
+            const pts = p.Points || 0;
+            if (!existing || pts > existing.Points) {
+                playerMap.set(p.UserID, {
+                    UserID: p.UserID,
+                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
+                    Points: pts,
+                    Clan: p.League || p.LeagueName || '—',
+                });
+                if (!existing) globalAdded++;
+            }
+        }
+    }
+    if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
+    else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
+
+    // Use pre-fetched extra tracked players.
+    const extraFetched = prefetchedExtraPlayers;
+    let extraCount = 0;
+    const extraNeedResolve = [];
+    for (const p of extraFetched) {
+        if (!p || !p.UserID) continue;
+        let displayName = p.DisplayName || resolvedCache[p.UserID] || null;
+        if (!displayName || displayName === String(p.UserID)) {
+            extraNeedResolve.push(p.UserID);
+            displayName = resolvedCache[p.UserID] || String(p.UserID);
+        }
+        playerMap.set(p.UserID, {
+            UserID: p.UserID,
+            DisplayName: displayName,
+            Points: p.Points || 0,
+            Clan: p.League || p.LeagueName || '—',
+        });
+        extraCount++;
+    }
+    if (extraNeedResolve.length) {
+        const resolved = await resolveUsernames(extraNeedResolve);
+        for (const [id, name] of Object.entries(resolved)) {
+            const numId = Number(id);
+            if (playerMap.has(numId)) playerMap.get(numId).DisplayName = name;
+        }
+        Object.assign(resolvedCache, resolved);
+    }
+    console.log(`Transcend: extra tracked players — ${extraCount} fetched, ${EXTRA_TRACKED_PLAYERS.length - extraCount} failed.`);
+
+    const transcendPlayers = [...playerMap.values()]
+        .sort((a, b) => b.Points - a.Points)
+        .slice(0, 5000);
+
+    let transcendHistory = [];
+    if (existsSync(TRANSCEND_HISTORY_FILE)) {
+        try { transcendHistory = JSON.parse(readFileSync(TRANSCEND_HISTORY_FILE, 'utf8')); } catch (_) { transcendHistory = []; }
+    }
+    transcendHistory.push({ ts: now, players: transcendPlayers });
+    transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
+    writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
+    console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${bestRosterByLeague.size} leagues, ${transcendHistory.length} snapshots retained.`);
+}
+await buildTranscendFromLeagues();
 
 // 1. Get active clan battle info to find the current battle key.
 const battleInfo = await fetchJson(`${API_BASE}/api/activeClanBattle`);
@@ -272,10 +457,6 @@ const totalExtracted = playerMap.size;
 console.log(`Extracted ${totalExtracted} players, keeping top ${players.length}.`);
 
 // 5. Resolve display names via Roblox API.
-let resolvedCache = {};
-if (existsSync(RESOLVED_CACHE_FILE)) {
-    try { resolvedCache = JSON.parse(readFileSync(RESOLVED_CACHE_FILE, 'utf8')); } catch (_) { resolvedCache = {}; }
-}
 
 const needsResolve = [];
 players.forEach(p => {
@@ -301,7 +482,6 @@ if (existsSync(HISTORY_FILE)) {
     try { history = JSON.parse(readFileSync(HISTORY_FILE, 'utf8')); } catch (_) { history = []; }
 }
 
-const now = Date.now();
 history.push({ ts: now, players });
 history = history.filter(entry => now - entry.ts <= RETENTION_MS);
 writeFileSync(HISTORY_FILE, JSON.stringify(history));
@@ -309,191 +489,7 @@ writeFileSync(HISTORY_FILE, JSON.stringify(history));
 const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(`Snapshot recorded: ${players.length} players in ${elapsedSec}s, ${history.length} snapshots retained.`);
 
-// 6b. League Part 2 snapshot (uses /v1/leagues API).
-async function snapshotLeagues() {
-    const leaguePageNums = Array.from({ length: LEAGUE_TOP_PAGES }, (_, i) => i + 1);
-    const leaguePageResults = await mapWithConcurrency(leaguePageNums, LIST_CONCURRENCY, async page => {
-        const json = await fetchJson(`${API_V1}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        return json?.data?.leagues || [];
-    });
-    const leagueSummaries = leaguePageResults.flat();
-    if (!leagueSummaries.length) {
-        console.log('League snapshot: no league data returned — skipping.');
-        return;
-    }
-
-    const leagueDetails = await mapWithConcurrency(leagueSummaries, DETAIL_CONCURRENCY, async summary => {
-        const detailJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(summary.Name)}`);
-        const detail = detailJson?.data;
-        if (!detail) {
-            return {
-                ID: summary.ID, Name: summary.Name, Points: summary.Points,
-                Members: summary.Members, MemberCapacity: summary.MemberCapacity, roster: [],
-            };
-        }
-        const contribByUser = {};
-        (detail.PointContributions || []).forEach(c => { contribByUser[c.UserID] = c.Points; });
-        const roster = [];
-        if (detail.Owner && detail.Owner.UserID) {
-            roster.push({
-                UserID: detail.Owner.UserID, DisplayName: detail.Owner.DisplayName,
-                Points: contribByUser[detail.Owner.UserID] ?? 0, Role: 'Owner',
-            });
-        }
-        (detail.Members || []).forEach(m => {
-            roster.push({
-                UserID: m.UserID, DisplayName: m.DisplayName,
-                Points: contribByUser[m.UserID] ?? 0, Role: 'Member',
-            });
-        });
-        return {
-            ID: detail.ID, Name: detail.Name, Points: detail.Points,
-            Members: roster.length, MemberCapacity: detail.MemberCapacity,
-            Level: detail.Level, roster,
-        };
-    });
-
-    // Resolve numeric-fallback display names.
-    const leagueNeedsResolve = [];
-    leagueDetails.forEach(l => l.roster.forEach(p => {
-        if (p.DisplayName === String(p.UserID)) {
-            if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; }
-            else { leagueNeedsResolve.push(p.UserID); }
-        }
-    }));
-    if (leagueNeedsResolve.length) {
-        const resolved = await resolveUsernames([...new Set(leagueNeedsResolve)]);
-        leagueDetails.forEach(l => l.roster.forEach(p => {
-            if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
-        }));
-        Object.assign(resolvedCache, resolved);
-        console.log(`League names resolved: ${Object.keys(resolved).length}/${leagueNeedsResolve.length}`);
-    }
-
-    let leagueHistory = [];
-    if (existsSync(LEAGUE_HISTORY_FILE)) {
-        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
-    }
-    leagueHistory.push({ ts: now, leagues: leagueDetails });
-    leagueHistory = leagueHistory.filter(entry => now - entry.ts <= RETENTION_MS);
-    writeFileSync(LEAGUE_HISTORY_FILE, JSON.stringify(leagueHistory));
-    console.log(`League snapshot: ${leagueDetails.length} leagues, ${leagueHistory.length} snapshots retained.`);
-}
-await snapshotLeagues();
-
-// 6c. Transcend individual player leaderboard — extracted from league rosters.
-// The league detail API intermittently returns empty rosters for some leagues.
-// To avoid players disappearing from the transcend list, we merge data across
-// ALL recent league snapshots — for each league, use the most recent snapshot
-// where its roster was non-empty.
-async function buildTranscendFromLeagues() {
-    let leagueHistory = [];
-    if (existsSync(LEAGUE_HISTORY_FILE)) {
-        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
-    }
-    if (!leagueHistory.length) {
-        console.log('Transcend snapshot: no league data available — skipping.');
-        return;
-    }
-
-    // Build best-known roster for each league by scanning snapshots newest-first.
-    const bestRosterByLeague = new Map();
-    for (let i = leagueHistory.length - 1; i >= 0; i--) {
-        for (const league of leagueHistory[i].leagues) {
-            if (bestRosterByLeague.has(league.Name)) continue;
-            if (league.roster && league.roster.length > 0) {
-                bestRosterByLeague.set(league.Name, league);
-            }
-        }
-    }
-
-    const playerMap = new Map();
-    for (const [, league] of bestRosterByLeague) {
-        for (const p of league.roster) {
-            const existing = playerMap.get(p.UserID);
-            if (!existing || p.Points > existing.Points) {
-                playerMap.set(p.UserID, {
-                    UserID: p.UserID,
-                    DisplayName: p.DisplayName || String(p.UserID),
-                    Points: p.Points || 0,
-                    Clan: league.Name || '—',
-                });
-            }
-        }
-    }
-
-    // Fetch top global individual contributors — includes players not in any top-500 league.
-    const globalPlayerPages = Array.from({ length: 10 }, (_, i) => i + 1);
-    const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
-        const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        if (!json?.data) return [];
-        const arr = Array.isArray(json.data) ? json.data : (json.data.players || json.data.data || []);
-        return Array.isArray(arr) ? arr : [];
-    });
-    let globalAdded = 0;
-    for (const page of globalPageResults) {
-        for (const p of page) {
-            if (!p || !p.UserID) continue;
-            const existing = playerMap.get(p.UserID);
-            const pts = p.Points || 0;
-            if (!existing || pts > existing.Points) {
-                playerMap.set(p.UserID, {
-                    UserID: p.UserID,
-                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
-                    Points: pts,
-                    Clan: p.League || p.LeagueName || '—',
-                });
-                if (!existing) globalAdded++;
-            }
-        }
-    }
-    if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
-    else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
-
-    // Use pre-fetched extra tracked players (fetched at start before rate limits).
-    const extraFetched = prefetchedExtraPlayers;
-    let extraCount = 0;
-    const extraNeedResolve = [];
-    for (const p of extraFetched) {
-        if (!p || !p.UserID) continue;
-        let displayName = p.DisplayName || resolvedCache[p.UserID] || null;
-        if (!displayName || displayName === String(p.UserID)) {
-            extraNeedResolve.push(p.UserID);
-            displayName = resolvedCache[p.UserID] || String(p.UserID);
-        }
-        playerMap.set(p.UserID, {
-            UserID: p.UserID,
-            DisplayName: displayName,
-            Points: p.Points || 0,
-            Clan: p.League || p.LeagueName || '—',
-        });
-        extraCount++;
-    }
-    if (extraNeedResolve.length) {
-        const resolved = await resolveUsernames(extraNeedResolve);
-        for (const [id, name] of Object.entries(resolved)) {
-            const numId = Number(id);
-            if (playerMap.has(numId)) playerMap.get(numId).DisplayName = name;
-        }
-        Object.assign(resolvedCache, resolved);
-    }
-    console.log(`Transcend: extra tracked players — ${extraCount} fetched, ${EXTRA_TRACKED_PLAYERS.length - extraCount} failed.`);
-
-    const transcendPlayers = [...playerMap.values()]
-        .sort((a, b) => b.Points - a.Points)
-        .slice(0, 5000);
-
-    let transcendHistory = [];
-    if (existsSync(TRANSCEND_HISTORY_FILE)) {
-        try { transcendHistory = JSON.parse(readFileSync(TRANSCEND_HISTORY_FILE, 'utf8')); } catch (_) { transcendHistory = []; }
-    }
-    transcendHistory.push({ ts: now, players: transcendPlayers });
-    transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
-    writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
-    console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${bestRosterByLeague.size} leagues, ${transcendHistory.length} snapshots retained.`);
-}
-await buildTranscendFromLeagues();
-
+// 6b. (League + Transcend already done above before tap hero to avoid rate limits)
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
 // 7. Player-level inactivity monitoring.
