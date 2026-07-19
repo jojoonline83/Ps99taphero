@@ -148,7 +148,7 @@ function renderLeaderboard() {
       <tr onclick="showPlayerDetail(${p.UserID})" style="cursor:pointer">
         <td class="player-rank">${idx + 1}</td>
         <td class="player-name"><span class="st-team-dot" style="background:${color}"></span> ${esc(p.DisplayName)}</td>
-        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.League || '—')}</td>
+        <td style="font-size:12px;color:var(--text-secondary)">${esc(p.Clan || '—')}</td>
         <td class="player-points" style="color:${color}">${fmt(p.Points)}</td>
         <td style="color:${d10.color};font-size:12px">${d10.text}</td>
         <td style="color:${d30.color};font-size:12px">${d30.text}</td>
@@ -174,7 +174,7 @@ function renderPlayerDetail(userId) {
     document.getElementById('player-detail-sub').textContent = `User ID: ${player.UserID}`;
     document.getElementById('pd-rank').textContent = `#${fmt(rank)}`;
     document.getElementById('pd-pts').textContent = fmt(player.Points);
-    document.getElementById('pd-league').textContent = player.League || '—';
+    document.getElementById('pd-league').textContent = player.Clan || '—';
 
     const d10 = playerDelta(userId, player.Points, 10 * 60_000, 11 * 60_000);
     const d30 = playerDelta(userId, player.Points, 30 * 60_000, 8  * 60_000);
@@ -217,13 +217,55 @@ function renderPlayerDetail(userId) {
     }).join('');
 }
 
+const API_BASE = 'https://ps99.biggamesapi.io/v1';
+const CORS_PROXIES = [
+    'https://corsproxy.io/?url=',
+    'https://api.allorigins.win/raw?url=',
+];
+
+async function apiFetch(path) {
+    const url = `${API_BASE}${path}`;
+    const isValid = d => d && typeof d === 'object' && d.status === 'ok';
+    try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (res.ok) { const d = await res.json(); if (isValid(d)) return d; }
+    } catch (_) {}
+    for (const proxy of CORS_PROXIES) {
+        try {
+            const res = await fetch(proxy + encodeURIComponent(url), { signal: AbortSignal.timeout(20000) });
+            if (res.ok) { const d = await res.json(); if (isValid(d)) return d; }
+        } catch (_) {}
+    }
+    return null;
+}
+
+async function resolveUsernameToId(username) {
+    const ROBLOX_URL = 'https://users.roblox.com/v1/usernames/users';
+    const body = JSON.stringify({ usernames: [username], excludeBannedUsers: false });
+    const headers = { 'Content-Type': 'application/json' };
+    try {
+        const res = await fetch(ROBLOX_URL, { method: 'POST', headers, body, signal: AbortSignal.timeout(8000) });
+        if (res.ok) { const json = await res.json(); return json.data?.[0] || null; }
+    } catch (_) {}
+    for (const proxy of CORS_PROXIES) {
+        try {
+            const res = await fetch(`${proxy}${encodeURIComponent(ROBLOX_URL)}`, { method: 'POST', headers, body, signal: AbortSignal.timeout(12000) });
+            if (res.ok) { const json = await res.json(); return json.data?.[0] || null; }
+        } catch (_) {}
+    }
+    return null;
+}
+
 async function searchPlayers() {
     const input = document.getElementById('search-player-name');
     const query = (input?.value || '').trim();
     if (!query) { toast('Enter a player name', 'error'); return; }
 
     const btn = document.getElementById('search-player-btn');
+    const statusEl = document.getElementById('search-status');
     btn.disabled = true;
+    statusEl.className = 'import-status loading';
+    statusEl.innerHTML = '<span class="spinner"></span>Searching...';
 
     const localPlayers = allPlayers();
     const queryLower = query.toLowerCase();
@@ -231,19 +273,51 @@ async function searchPlayers() {
         p.DisplayName.toLowerCase().includes(queryLower) || String(p.UserID) === query
     );
 
-    state.searchResults = localMatches;
+    if (localMatches.length) {
+        state.searchResults = localMatches;
+        state.mode = 'search';
+        save();
+        renderLeaderboard();
+        statusEl.className = 'import-status success';
+        statusEl.textContent = `Found ${localMatches.length} player(s).`;
+        btn.disabled = false;
+        return;
+    }
+
+    // Not found locally — try live API lookup.
+    let userId = Number(query) || null;
+    if (!userId) {
+        const robloxUser = await resolveUsernameToId(query);
+        if (robloxUser) userId = robloxUser.id;
+    }
+
+    if (userId) {
+        const res = await apiFetch(`/leagues/players/${userId}`);
+        if (res?.data) {
+            const p = res.data;
+            const livePlayer = {
+                UserID: p.UserID,
+                DisplayName: p.DisplayName || String(p.UserID),
+                Points: p.Points || 0,
+                Clan: p.League || p.LeagueName || '—',
+            };
+            state.searchResults = [livePlayer];
+            state.mode = 'search';
+            save();
+            renderLeaderboard();
+            statusEl.className = 'import-status success';
+            statusEl.textContent = `Found via live API: ${livePlayer.DisplayName} (${fmt(livePlayer.Points)} pts)`;
+            btn.disabled = false;
+            return;
+        }
+    }
+
+    state.searchResults = [];
     state.mode = 'search';
     save();
     renderLeaderboard();
-
-    const statusEl = document.getElementById('search-status');
-    if (localMatches.length) {
-        statusEl.className = 'import-status success';
-        statusEl.textContent = `Found ${localMatches.length} player(s).`;
-    } else {
-        statusEl.className = 'import-status error';
-        statusEl.textContent = `No players found matching "${query}".`;
-    }
+    statusEl.className = 'import-status error';
+    statusEl.textContent = `No players found matching "${query}".`;
     btn.disabled = false;
 }
 

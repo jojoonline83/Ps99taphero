@@ -382,7 +382,7 @@ async function snapshotTranscend() {
         UserID: p.UserID,
         DisplayName: p.DisplayName || String(p.UserID),
         Points: p.Points || 0,
-        League: p.League || p.LeagueName || '—',
+        Clan: p.League || p.LeagueName || '—',
     }));
 
     // Resolve numeric display names.
