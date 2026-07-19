@@ -363,22 +363,34 @@ async function snapshotLeagues() {
 await snapshotLeagues();
 
 // 6c. Transcend individual player leaderboard — extracted from league rosters.
-// Uses the league detail data already fetched above (500 leagues × up to 4 players
-// = ~2000 individual players with their point contributions).
+// The league detail API intermittently returns empty rosters for some leagues.
+// To avoid players disappearing from the transcend list, we merge data across
+// ALL recent league snapshots — for each league, use the most recent snapshot
+// where its roster was non-empty.
 function buildTranscendFromLeagues() {
     let leagueHistory = [];
     if (existsSync(LEAGUE_HISTORY_FILE)) {
         try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
     }
-    const latestLeagues = leagueHistory.length ? leagueHistory[leagueHistory.length - 1].leagues : [];
-    if (!latestLeagues.length) {
+    if (!leagueHistory.length) {
         console.log('Transcend snapshot: no league data available — skipping.');
         return;
     }
 
+    // Build best-known roster for each league by scanning snapshots newest-first.
+    const bestRosterByLeague = new Map();
+    for (let i = leagueHistory.length - 1; i >= 0; i--) {
+        for (const league of leagueHistory[i].leagues) {
+            if (bestRosterByLeague.has(league.Name)) continue;
+            if (league.roster && league.roster.length > 0) {
+                bestRosterByLeague.set(league.Name, league);
+            }
+        }
+    }
+
     const playerMap = new Map();
-    for (const league of latestLeagues) {
-        for (const p of (league.roster || [])) {
+    for (const [, league] of bestRosterByLeague) {
+        for (const p of league.roster) {
             const existing = playerMap.get(p.UserID);
             if (!existing || p.Points > existing.Points) {
                 playerMap.set(p.UserID, {
@@ -402,7 +414,7 @@ function buildTranscendFromLeagues() {
     transcendHistory.push({ ts: now, players: transcendPlayers });
     transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
     writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
-    console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${latestLeagues.length} leagues, ${transcendHistory.length} snapshots retained.`);
+    console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${bestRosterByLeague.size} leagues, ${transcendHistory.length} snapshots retained.`);
 }
 buildTranscendFromLeagues();
 
