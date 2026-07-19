@@ -15,6 +15,12 @@ const DETAIL_CONCURRENCY = 20;
 const MAX_PLAYERS        = 5000;
 const LEAGUE_TOP_PAGES   = 5;
 
+// Extra players to always include in the transcend leaderboard even if their
+// league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
+const EXTRA_TRACKED_PLAYERS = [
+    3543344398, // JavierPlayz
+];
+
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
 
@@ -367,7 +373,7 @@ await snapshotLeagues();
 // To avoid players disappearing from the transcend list, we merge data across
 // ALL recent league snapshots — for each league, use the most recent snapshot
 // where its roster was non-empty.
-function buildTranscendFromLeagues() {
+async function buildTranscendFromLeagues() {
     let leagueHistory = [];
     if (existsSync(LEAGUE_HISTORY_FILE)) {
         try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
@@ -403,6 +409,42 @@ function buildTranscendFromLeagues() {
         }
     }
 
+    // Fetch extra tracked players that may be outside the top 500 leagues.
+    const extraFetched = await mapWithConcurrency(
+        EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id)),
+        5,
+        async userId => {
+            const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
+            return json?.data || null;
+        }
+    );
+    let extraCount = 0;
+    const extraNeedResolve = [];
+    for (const p of extraFetched) {
+        if (!p || !p.UserID) continue;
+        let displayName = p.DisplayName || resolvedCache[p.UserID] || null;
+        if (!displayName || displayName === String(p.UserID)) {
+            extraNeedResolve.push(p.UserID);
+            displayName = resolvedCache[p.UserID] || String(p.UserID);
+        }
+        playerMap.set(p.UserID, {
+            UserID: p.UserID,
+            DisplayName: displayName,
+            Points: p.Points || 0,
+            Clan: p.League || p.LeagueName || '—',
+        });
+        extraCount++;
+    }
+    if (extraNeedResolve.length) {
+        const resolved = await resolveUsernames(extraNeedResolve);
+        for (const [id, name] of Object.entries(resolved)) {
+            const numId = Number(id);
+            if (playerMap.has(numId)) playerMap.get(numId).DisplayName = name;
+        }
+        Object.assign(resolvedCache, resolved);
+    }
+    if (extraCount) console.log(`Transcend: fetched ${extraCount} extra tracked player(s) outside top leagues.`);
+
     const transcendPlayers = [...playerMap.values()]
         .sort((a, b) => b.Points - a.Points)
         .slice(0, 2000);
@@ -416,7 +458,7 @@ function buildTranscendFromLeagues() {
     writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
     console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${bestRosterByLeague.size} leagues, ${transcendHistory.length} snapshots retained.`);
 }
-buildTranscendFromLeagues();
+await buildTranscendFromLeagues();
 
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
