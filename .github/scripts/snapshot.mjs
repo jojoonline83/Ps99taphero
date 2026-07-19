@@ -409,6 +409,31 @@ async function buildTranscendFromLeagues() {
         }
     }
 
+    // Fetch top global individual contributors — includes players not in any top-500 league.
+    const globalPlayerPages = Array.from({ length: 10 }, (_, i) => i + 1);
+    const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
+        const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        return json?.data || [];
+    });
+    let globalAdded = 0;
+    for (const page of globalPageResults) {
+        for (const p of page) {
+            if (!p || !p.UserID) continue;
+            const existing = playerMap.get(p.UserID);
+            const pts = p.Points || 0;
+            if (!existing || pts > existing.Points) {
+                playerMap.set(p.UserID, {
+                    UserID: p.UserID,
+                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
+                    Points: pts,
+                    Clan: p.League || p.LeagueName || '—',
+                });
+                if (!existing) globalAdded++;
+            }
+        }
+    }
+    if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
+
     // Fetch extra tracked players that may be outside the top 500 leagues.
     const extraFetched = await mapWithConcurrency(
         EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id)),
