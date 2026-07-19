@@ -8,7 +8,7 @@ const PALETTE = [
 
 let historyData = [];
 let state = { mode: 'top', searchResults: [], colorByUser: {}, nextColorIdx: 0 };
-const DISPLAY_LIMIT = 1000;
+const DISPLAY_LIMIT = 5000;
 
 function save() {
     try { localStorage.setItem('ps99_transcend_v1', JSON.stringify(state)); } catch (_) {}

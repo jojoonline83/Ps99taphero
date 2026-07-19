@@ -470,9 +470,32 @@ async function buildTranscendFromLeagues() {
     }
     if (extraCount) console.log(`Transcend: fetched ${extraCount} extra tracked player(s) outside top leagues.`);
 
+    // Merge players from tap hero / clan battle data (history.json).
+    let tapHeroHistory = [];
+    if (existsSync(HISTORY_FILE)) {
+        try { tapHeroHistory = JSON.parse(readFileSync(HISTORY_FILE, 'utf8')); } catch (_) { tapHeroHistory = []; }
+    }
+    if (tapHeroHistory.length) {
+        const latestTapHero = tapHeroHistory[tapHeroHistory.length - 1];
+        let tapAdded = 0;
+        for (const p of (latestTapHero.players || [])) {
+            if (!p || !p.UserID) continue;
+            if (!playerMap.has(p.UserID)) {
+                playerMap.set(p.UserID, {
+                    UserID: p.UserID,
+                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
+                    Points: p.Points || 0,
+                    Clan: p.Clan || p.Team || '—',
+                });
+                tapAdded++;
+            }
+        }
+        if (tapAdded) console.log(`Transcend: merged ${tapAdded} additional player(s) from tap hero data.`);
+    }
+
     const transcendPlayers = [...playerMap.values()]
         .sort((a, b) => b.Points - a.Points)
-        .slice(0, 2000);
+        .slice(0, 5000);
 
     let transcendHistory = [];
     if (existsSync(TRANSCEND_HISTORY_FILE)) {
