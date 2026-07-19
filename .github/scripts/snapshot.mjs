@@ -285,7 +285,8 @@ async function buildTranscendFromLeagues() {
     }
 
     // Fetch top global individual contributors (includes solo players not in any league).
-    const globalPlayerPages = Array.from({ length: 10 }, (_, i) => i + 1);
+    // 25 pages (2500 entries) to capture solo players with lower scores.
+    const globalPlayerPages = Array.from({ length: 25 }, (_, i) => i + 1);
     const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
         const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
         if (!json?.data) return [];
@@ -312,11 +313,16 @@ async function buildTranscendFromLeagues() {
     if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
     else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
 
-    // Use pre-fetched extra tracked players.
+    // Use pre-fetched extra tracked players + fallback for those still missing.
     const extraFetched = prefetchedExtraPlayers;
     let extraCount = 0;
+    let extraFromGlobal = 0;
     const extraNeedResolve = [];
-    for (const p of extraFetched) {
+    for (let i = 0; i < EXTRA_TRACKED_PLAYERS.length; i++) {
+        const userId = EXTRA_TRACKED_PLAYERS[i];
+        // Already captured from global paginated fetch or league rosters?
+        if (playerMap.has(userId)) { extraFromGlobal++; continue; }
+        const p = extraFetched[i];
         if (!p || !p.UserID) continue;
         let displayName = p.DisplayName || resolvedCache[p.UserID] || null;
         if (!displayName || displayName === String(p.UserID)) {
@@ -331,15 +337,67 @@ async function buildTranscendFromLeagues() {
         });
         extraCount++;
     }
+
+    // Secondary fallback: try /v1/leaderboard/all for players still missing.
+    const stillMissing = EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id));
+    if (stillMissing.length) {
+        console.log(`Transcend: ${stillMissing.length} extra player(s) still missing — trying secondary endpoints...`);
+        for (const userId of stillMissing) {
+            // Try alternative endpoint formats.
+            const altEndpoints = [
+                `${API_V1}/leaderboard/players/${userId}`,
+                `${API_V1}/players/${userId}`,
+            ];
+            let found = false;
+            for (const url of altEndpoints) {
+                const json = await fetchJson(url, 2);
+                if (json?.data) {
+                    const d = Array.isArray(json.data) ? json.data[0] : json.data;
+                    if (d?.UserID || d?.Points !== undefined) {
+                        const displayName = d.DisplayName || resolvedCache[userId] || String(userId);
+                        playerMap.set(userId, {
+                            UserID: userId,
+                            DisplayName: displayName,
+                            Points: d.Points || 0,
+                            Clan: d.League || d.LeagueName || '—',
+                        });
+                        console.log(`  Found ${userId} via alt endpoint: ${displayName}, ${d.Points} pts`);
+                        found = true;
+                        extraCount++;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                // Last resort: resolve display name and add with 0 points so they're at least searchable.
+                const displayName = resolvedCache[userId] || null;
+                if (displayName) {
+                    playerMap.set(userId, { UserID: userId, DisplayName: displayName, Points: 0, Clan: '—' });
+                    console.log(`  Added ${userId} (${displayName}) with 0 pts as placeholder.`);
+                    extraCount++;
+                } else {
+                    extraNeedResolve.push(userId);
+                }
+            }
+        }
+    }
+
     if (extraNeedResolve.length) {
         const resolved = await resolveUsernames(extraNeedResolve);
         for (const [id, name] of Object.entries(resolved)) {
             const numId = Number(id);
-            if (playerMap.has(numId)) playerMap.get(numId).DisplayName = name;
+            if (playerMap.has(numId)) {
+                playerMap.get(numId).DisplayName = name;
+            } else {
+                // Add previously unresolved players now that we have their name.
+                playerMap.set(numId, { UserID: numId, DisplayName: name, Points: 0, Clan: '—' });
+                extraCount++;
+            }
         }
         Object.assign(resolvedCache, resolved);
     }
-    console.log(`Transcend: extra tracked players — ${extraCount} fetched, ${EXTRA_TRACKED_PLAYERS.length - extraCount} failed.`);
+    const totalMissing = EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id)).length;
+    console.log(`Transcend: extra tracked players — ${extraCount} from API, ${extraFromGlobal} from global pages, ${totalMissing} still missing.`);
 
     const transcendPlayers = [...playerMap.values()]
         .sort((a, b) => b.Points - a.Points)
