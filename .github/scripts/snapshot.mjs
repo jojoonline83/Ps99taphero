@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 const API_BASE           = 'https://ps99.biggamesapi.io';
 const API_V1             = 'https://ps99.biggamesapi.io/v1';
 const HISTORY_FILE        = 'history.json';
-const LEAGUE_HISTORY_FILE = 'league_history.json';
+const LEAGUE_HISTORY_FILE    = 'league_history.json';
+const TRANSCEND_HISTORY_FILE = 'transcend_history.json';
 const COLLECTION_FILE     = 'collection.json';
 const RESOLVED_CACHE_FILE = 'resolved_names.json';
 const RETENTION_MS       = 95 * 60 * 1000;
@@ -360,6 +361,58 @@ async function snapshotLeagues() {
     console.log(`League snapshot: ${leagueDetails.length} leagues, ${leagueHistory.length} snapshots retained.`);
 }
 await snapshotLeagues();
+
+// 6c. Transcend individual player leaderboard (uses /v1/leagues/players).
+async function snapshotTranscend() {
+    const pages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const allContributors = [];
+    for (const page of pages) {
+        const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+        const batch = json?.data?.players || json?.data || [];
+        if (!Array.isArray(batch) || !batch.length) break;
+        allContributors.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+    }
+    if (!allContributors.length) {
+        console.log('Transcend snapshot: no player data returned — skipping.');
+        return;
+    }
+
+    const transcendPlayers = allContributors.map(p => ({
+        UserID: p.UserID,
+        DisplayName: p.DisplayName || String(p.UserID),
+        Points: p.Points || 0,
+        League: p.League || p.LeagueName || '—',
+    }));
+
+    // Resolve numeric display names.
+    const needsResolve = [];
+    transcendPlayers.forEach(p => {
+        if (p.DisplayName === String(p.UserID)) {
+            if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; }
+            else { needsResolve.push(p.UserID); }
+        }
+    });
+    if (needsResolve.length) {
+        const resolved = await resolveUsernames([...new Set(needsResolve)]);
+        transcendPlayers.forEach(p => {
+            if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
+        });
+        Object.assign(resolvedCache, resolved);
+        console.log(`Transcend names resolved: ${Object.keys(resolved).length}/${needsResolve.length}`);
+    }
+
+    let transcendHistory = [];
+    if (existsSync(TRANSCEND_HISTORY_FILE)) {
+        try { transcendHistory = JSON.parse(readFileSync(TRANSCEND_HISTORY_FILE, 'utf8')); } catch (_) { transcendHistory = []; }
+    }
+    transcendHistory.push({ ts: now, players: transcendPlayers });
+    transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
+    writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
+    console.log(`Transcend snapshot: ${transcendPlayers.length} players, ${transcendHistory.length} snapshots retained.`);
+}
+await snapshotTranscend();
+
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
 // 7. Player-level inactivity monitoring.
