@@ -284,13 +284,28 @@ async function searchPlayers() {
         return;
     }
 
-    // Not found locally — try live API lookup.
+    // Not found locally — try resolving username to UserID, then search again.
     let userId = Number(query) || null;
     if (!userId) {
         const robloxUser = await resolveUsernameToId(query);
-        if (robloxUser) userId = robloxUser.id;
+        if (robloxUser) {
+            userId = robloxUser.id;
+            // Search local data again with the resolved UserID.
+            const matchById = localPlayers.filter(p => p.UserID === userId);
+            if (matchById.length) {
+                state.searchResults = matchById;
+                state.mode = 'search';
+                save();
+                renderLeaderboard();
+                statusEl.className = 'import-status success';
+                statusEl.textContent = `Found ${matchById.length} player(s) (resolved from "${query}").`;
+                btn.disabled = false;
+                return;
+            }
+        }
     }
 
+    // Try live API lookup by UserID.
     if (userId) {
         const res = await apiFetch(`/leagues/players/${userId}`);
         if (res?.data) {

@@ -362,45 +362,38 @@ async function snapshotLeagues() {
 }
 await snapshotLeagues();
 
-// 6c. Transcend individual player leaderboard (uses /v1/leagues/players).
-async function snapshotTranscend() {
-    const pages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    const allContributors = [];
-    for (const page of pages) {
-        const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        const batch = json?.data?.players || json?.data || [];
-        if (!Array.isArray(batch) || !batch.length) break;
-        allContributors.push(...batch);
-        if (batch.length < PAGE_SIZE) break;
+// 6c. Transcend individual player leaderboard — extracted from league rosters.
+// Uses the league detail data already fetched above (500 leagues × up to 4 players
+// = ~2000 individual players with their point contributions).
+function buildTranscendFromLeagues() {
+    let leagueHistory = [];
+    if (existsSync(LEAGUE_HISTORY_FILE)) {
+        try { leagueHistory = JSON.parse(readFileSync(LEAGUE_HISTORY_FILE, 'utf8')); } catch (_) { leagueHistory = []; }
     }
-    if (!allContributors.length) {
-        console.log('Transcend snapshot: no player data returned — skipping.');
+    const latestLeagues = leagueHistory.length ? leagueHistory[leagueHistory.length - 1].leagues : [];
+    if (!latestLeagues.length) {
+        console.log('Transcend snapshot: no league data available — skipping.');
         return;
     }
 
-    const transcendPlayers = allContributors.map(p => ({
-        UserID: p.UserID,
-        DisplayName: p.DisplayName || String(p.UserID),
-        Points: p.Points || 0,
-        Clan: p.League || p.LeagueName || '—',
-    }));
-
-    // Resolve numeric display names.
-    const needsResolve = [];
-    transcendPlayers.forEach(p => {
-        if (p.DisplayName === String(p.UserID)) {
-            if (resolvedCache[p.UserID]) { p.DisplayName = resolvedCache[p.UserID]; }
-            else { needsResolve.push(p.UserID); }
+    const playerMap = new Map();
+    for (const league of latestLeagues) {
+        for (const p of (league.roster || [])) {
+            const existing = playerMap.get(p.UserID);
+            if (!existing || p.Points > existing.Points) {
+                playerMap.set(p.UserID, {
+                    UserID: p.UserID,
+                    DisplayName: p.DisplayName || String(p.UserID),
+                    Points: p.Points || 0,
+                    Clan: league.Name || '—',
+                });
+            }
         }
-    });
-    if (needsResolve.length) {
-        const resolved = await resolveUsernames([...new Set(needsResolve)]);
-        transcendPlayers.forEach(p => {
-            if (p.DisplayName === String(p.UserID) && resolved[p.UserID]) p.DisplayName = resolved[p.UserID];
-        });
-        Object.assign(resolvedCache, resolved);
-        console.log(`Transcend names resolved: ${Object.keys(resolved).length}/${needsResolve.length}`);
     }
+
+    const transcendPlayers = [...playerMap.values()]
+        .sort((a, b) => b.Points - a.Points)
+        .slice(0, 2000);
 
     let transcendHistory = [];
     if (existsSync(TRANSCEND_HISTORY_FILE)) {
@@ -409,9 +402,9 @@ async function snapshotTranscend() {
     transcendHistory.push({ ts: now, players: transcendPlayers });
     transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
     writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
-    console.log(`Transcend snapshot: ${transcendPlayers.length} players, ${transcendHistory.length} snapshots retained.`);
+    console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${latestLeagues.length} leagues, ${transcendHistory.length} snapshots retained.`);
 }
-await snapshotTranscend();
+buildTranscendFromLeagues();
 
 writeFileSync(RESOLVED_CACHE_FILE, JSON.stringify(resolvedCache));
 
