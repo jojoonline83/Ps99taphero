@@ -17,8 +17,9 @@ const LEAGUE_TOP_PAGES   = 5;
 
 // Extra players to always include in the transcend leaderboard even if their
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
+// fallbackPts is used when the API returns no data (solo players not in any league).
 const EXTRA_TRACKED_PLAYERS = [
-    3543344398, // JavierPlayz
+    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 18 },
 ];
 
 // Players to always monitor for inactivity (by display name or UserID).
@@ -166,7 +167,8 @@ if (existsSync(RESOLVED_CACHE_FILE)) {
 }
 
 // 0. Pre-fetch extra tracked players FIRST (before heavy bulk fetches exhaust rate limit).
-const prefetchedExtraPlayers = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 3, async userId => {
+const prefetchedExtraPlayers = await mapWithConcurrency(EXTRA_TRACKED_PLAYERS, 3, async entry => {
+    const userId = entry.userId;
     const json = await fetchJson(`${API_V1}/leagues/players/${userId}`);
     if (!json) { console.log(`  Pre-fetch player ${userId}: API returned null`); return null; }
     const d = json.data;
@@ -319,7 +321,8 @@ async function buildTranscendFromLeagues() {
     let extraFromGlobal = 0;
     const extraNeedResolve = [];
     for (let i = 0; i < EXTRA_TRACKED_PLAYERS.length; i++) {
-        const userId = EXTRA_TRACKED_PLAYERS[i];
+        const entry = EXTRA_TRACKED_PLAYERS[i];
+        const userId = entry.userId;
         // Already captured from global paginated fetch or league rosters?
         if (playerMap.has(userId)) { extraFromGlobal++; continue; }
         const p = extraFetched[i];
@@ -338,12 +341,12 @@ async function buildTranscendFromLeagues() {
         extraCount++;
     }
 
-    // Secondary fallback: try /v1/leaderboard/all for players still missing.
-    const stillMissing = EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id));
+    // Secondary fallback: try alt endpoints, then use configured fallback score.
+    const stillMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId));
     if (stillMissing.length) {
         console.log(`Transcend: ${stillMissing.length} extra player(s) still missing — trying secondary endpoints...`);
-        for (const userId of stillMissing) {
-            // Try alternative endpoint formats.
+        for (const entry of stillMissing) {
+            const userId = entry.userId;
             const altEndpoints = [
                 `${API_V1}/leaderboard/players/${userId}`,
                 `${API_V1}/players/${userId}`,
@@ -354,7 +357,7 @@ async function buildTranscendFromLeagues() {
                 if (json?.data) {
                     const d = Array.isArray(json.data) ? json.data[0] : json.data;
                     if (d?.UserID || d?.Points !== undefined) {
-                        const displayName = d.DisplayName || resolvedCache[userId] || String(userId);
+                        const displayName = d.DisplayName || resolvedCache[userId] || entry.name || String(userId);
                         playerMap.set(userId, {
                             UserID: userId,
                             DisplayName: displayName,
@@ -369,11 +372,12 @@ async function buildTranscendFromLeagues() {
                 }
             }
             if (!found) {
-                // Last resort: resolve display name and add with 0 points so they're at least searchable.
-                const displayName = resolvedCache[userId] || null;
+                // Use configured fallback score for solo players the API doesn't track.
+                const displayName = resolvedCache[userId] || entry.name || null;
+                const pts = entry.fallbackPts ?? 0;
                 if (displayName) {
-                    playerMap.set(userId, { UserID: userId, DisplayName: displayName, Points: 0, Clan: '—' });
-                    console.log(`  Added ${userId} (${displayName}) with 0 pts as placeholder.`);
+                    playerMap.set(userId, { UserID: userId, DisplayName: displayName, Points: pts, Clan: '—' });
+                    console.log(`  Added ${userId} (${displayName}) with ${pts} pts (fallback).`);
                     extraCount++;
                 } else {
                     extraNeedResolve.push(userId);
@@ -389,14 +393,15 @@ async function buildTranscendFromLeagues() {
             if (playerMap.has(numId)) {
                 playerMap.get(numId).DisplayName = name;
             } else {
-                // Add previously unresolved players now that we have their name.
-                playerMap.set(numId, { UserID: numId, DisplayName: name, Points: 0, Clan: '—' });
+                const entry = EXTRA_TRACKED_PLAYERS.find(e => e.userId === numId);
+                const pts = entry?.fallbackPts ?? 0;
+                playerMap.set(numId, { UserID: numId, DisplayName: name, Points: pts, Clan: '—' });
                 extraCount++;
             }
         }
         Object.assign(resolvedCache, resolved);
     }
-    const totalMissing = EXTRA_TRACKED_PLAYERS.filter(id => !playerMap.has(id)).length;
+    const totalMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId)).length;
     console.log(`Transcend: extra tracked players — ${extraCount} from API, ${extraFromGlobal} from global pages, ${totalMissing} still missing.`);
 
     const transcendPlayers = [...playerMap.values()]
