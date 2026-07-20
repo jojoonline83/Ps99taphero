@@ -431,7 +431,7 @@ async function buildTranscendFromLeagues() {
             UserID: p.UserID,
             DisplayName: displayName,
             Points: pts,
-            Clan: p.League || p.LeagueName || '—',
+            Clan: leagueName(p.League || p.LeagueName),
         });
         extraCount++;
     }
@@ -457,7 +457,7 @@ async function buildTranscendFromLeagues() {
                             UserID: userId,
                             DisplayName: displayName,
                             Points: d.Points || 0,
-                            Clan: d.League || d.LeagueName || '—',
+                            Clan: leagueName(d.League || d.LeagueName),
                         });
                         console.log(`  Found ${userId} via alt endpoint: ${displayName}, ${d.Points} pts`);
                         found = true;
