@@ -547,6 +547,48 @@ async function buildTranscendFromLeagues() {
     transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
     writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
     console.log(`Transcend snapshot: ${transcendPlayers.length} players from ${bestRosterByLeague.size} leagues, ${transcendHistory.length} snapshots retained.`);
+
+    // Transcend inactivity alert: fire Discord alert if monitored players gained 0 pts in 30m.
+    if (transcendHistory.length >= 2) {
+        const latest = transcendHistory[transcendHistory.length - 1];
+        const targetTs = latest.ts - 30 * 60_000;
+        let compareSnap = null, bestDiff = Infinity;
+        for (const snap of transcendHistory) {
+            if (snap === latest) continue;
+            if (latest.ts - snap.ts < 15 * 60_000) continue;
+            const diff = Math.abs(snap.ts - targetTs);
+            if (diff < bestDiff) { bestDiff = diff; compareSnap = snap; }
+        }
+        if (compareSnap && bestDiff <= 10 * 60_000) {
+            mkdirSync(MONITOR_DIR, { recursive: true });
+            const TRANSCEND_ALERT_FILE = `${MONITOR_DIR}/transcend_alert_state.json`;
+            let tAlertState = {};
+            if (existsSync(TRANSCEND_ALERT_FILE)) {
+                try { tAlertState = JSON.parse(readFileSync(TRANSCEND_ALERT_FILE, 'utf8')); } catch (_) { tAlertState = {}; }
+            }
+
+            for (const entry of EXTRA_TRACKED_PLAYERS) {
+                const current = latest.players.find(p => p.UserID === entry.userId);
+                const past = compareSnap.players?.find(p => p.UserID === entry.userId);
+                if (!current || !past) continue;
+
+                const delta = current.Points - past.Points;
+                const key = `${entry.userId}:30m`;
+                const name = current.DisplayName || entry.name || String(entry.userId);
+
+                if (delta === 0 && !tAlertState[key]) {
+                    await sendDiscordAlert(`⚠️ **${name}** (Transcend) has gained 0 points in the last ~30 minutes — possibly inactive (${current.Points} pts, league: ${current.Clan}).`);
+                    tAlertState[key] = true;
+                    console.log(`Transcend alert: ${name} stalled at ${current.Points} pts.`);
+                } else if (delta > 0) {
+                    tAlertState[key] = false;
+                }
+            }
+            writeFileSync(TRANSCEND_ALERT_FILE, JSON.stringify(tAlertState));
+        } else {
+            console.log('Transcend alert: not enough history for 30m comparison yet.');
+        }
+    }
 }
 await buildTranscendFromLeagues();
 
