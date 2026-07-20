@@ -19,8 +19,9 @@ const LEAGUE_TOP_PAGES   = 5;
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
 // fallbackPts is used when the API returns stale or no data.
 // minPts: if the API returns a score LOWER than this, override with minPts (handles API lag).
+// leagueName: fetch this league directly to find the player's contribution points.
 const EXTRA_TRACKED_PLAYERS = [
-    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 38 },
+    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 38, leagueName: 'jj02' },
     { userId: 3079452920, name: 'Jojo8', minPts: 37 },
 ];
 
@@ -436,42 +437,76 @@ async function buildTranscendFromLeagues() {
         extraCount++;
     }
 
-    // Secondary fallback: try alt endpoints, then use configured fallback score.
+    // Secondary fallback: fetch league directly by name, then try alt endpoints, then use fallback.
     const stillMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId));
     if (stillMissing.length) {
-        console.log(`Transcend: ${stillMissing.length} extra player(s) still missing — trying secondary endpoints...`);
+        console.log(`Transcend: ${stillMissing.length} extra player(s) still missing — trying direct league fetch + secondary endpoints...`);
         for (const entry of stillMissing) {
             const userId = entry.userId;
-            const altEndpoints = [
-                `${API_V1}/leaderboard/players/${userId}`,
-                `${API_V1}/players/${userId}`,
-            ];
             let found = false;
-            for (const url of altEndpoints) {
-                const json = await fetchJson(url, 2);
-                if (json?.data) {
-                    const d = Array.isArray(json.data) ? json.data[0] : json.data;
-                    if (d?.UserID || d?.Points !== undefined) {
-                        const displayName = d.DisplayName || resolvedCache[userId] || entry.name || String(userId);
+
+            // Try fetching the player's league directly by name.
+            if (entry.leagueName) {
+                const leagueJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(entry.leagueName)}`);
+                const detail = leagueJson?.data;
+                if (detail) {
+                    const contribs = {};
+                    (detail.PointContributions || []).forEach(c => { contribs[c.UserID] = c.Points; });
+                    const allMembers = [];
+                    if (detail.Owner?.UserID) allMembers.push(detail.Owner);
+                    (detail.Members || []).forEach(m => allMembers.push(m));
+                    const member = allMembers.find(m => m.UserID === userId);
+                    if (member) {
+                        const pts = Math.max(contribs[userId] || 0, entry.minPts || 0);
+                        const displayName = member.DisplayName || resolvedCache[userId] || entry.name || String(userId);
                         playerMap.set(userId, {
                             UserID: userId,
                             DisplayName: displayName,
-                            Points: d.Points || 0,
-                            Clan: leagueName(d.League || d.LeagueName),
+                            Points: pts,
+                            Clan: detail.Name || entry.leagueName,
                         });
-                        console.log(`  Found ${userId} via alt endpoint: ${displayName}, ${d.Points} pts`);
+                        console.log(`  Found ${userId} via direct league "${entry.leagueName}": ${displayName}, ${pts} pts`);
                         found = true;
                         extraCount++;
-                        break;
+                    } else {
+                        console.log(`  League "${entry.leagueName}" fetched (${allMembers.length} members) but ${userId} not found in roster.`);
+                    }
+                } else {
+                    console.log(`  League "${entry.leagueName}" fetch returned null.`);
+                }
+            }
+
+            if (!found) {
+                const altEndpoints = [
+                    `${API_V1}/leaderboard/players/${userId}`,
+                    `${API_V1}/players/${userId}`,
+                ];
+                for (const url of altEndpoints) {
+                    const json = await fetchJson(url, 2);
+                    if (json?.data) {
+                        const d = Array.isArray(json.data) ? json.data[0] : json.data;
+                        if (d?.UserID || d?.Points !== undefined) {
+                            const displayName = d.DisplayName || resolvedCache[userId] || entry.name || String(userId);
+                            playerMap.set(userId, {
+                                UserID: userId,
+                                DisplayName: displayName,
+                                Points: d.Points || 0,
+                                Clan: leagueName(d.League || d.LeagueName),
+                            });
+                            console.log(`  Found ${userId} via alt endpoint: ${displayName}, ${d.Points} pts`);
+                            found = true;
+                            extraCount++;
+                            break;
+                        }
                     }
                 }
             }
+
             if (!found) {
-                // Use configured fallback score for solo players the API doesn't track.
                 const displayName = resolvedCache[userId] || entry.name || null;
                 const pts = entry.fallbackPts ?? 0;
                 if (displayName) {
-                    playerMap.set(userId, { UserID: userId, DisplayName: displayName, Points: pts, Clan: '—' });
+                    playerMap.set(userId, { UserID: userId, DisplayName: displayName, Points: pts, Clan: entry.leagueName || '—' });
                     console.log(`  Added ${userId} (${displayName}) with ${pts} pts (fallback).`);
                     extraCount++;
                 } else {
