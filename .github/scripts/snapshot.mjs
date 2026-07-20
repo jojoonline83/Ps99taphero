@@ -325,11 +325,12 @@ async function buildTranscendFromLeagues() {
                 const pts = p.Points ?? p.points ?? p.Score ?? p.score ?? 0;
                 const existing = playerMap.get(userId);
                 if (!existing || pts > existing.Points) {
+                    const league = p.League || p.LeagueName || p.Clan;
                     playerMap.set(userId, {
                         UserID: userId,
                         DisplayName: p.DisplayName || p.displayName || resolvedCache[userId] || String(userId),
                         Points: pts,
-                        Clan: p.League || p.LeagueName || p.Clan || '—',
+                        Clan: typeof league === 'object' ? (league?.Name || '—') : (league || '—'),
                     });
                     if (!existing) added++;
                 }
@@ -338,6 +339,14 @@ async function buildTranscendFromLeagues() {
         } else {
             console.log(`  Endpoint ${ep.label}: data exists but no player array (type: ${typeof raw}, keys: ${Object.keys(raw).join(',')})`);
         }
+    }
+
+    // Helper: extract league name from string or object.
+    function leagueName(val) {
+        if (!val) return '—';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object' && val.Name) return val.Name;
+        return '—';
     }
 
     // Always run paginated /v1/leagues/players (known to work, covers league members + some solo).
@@ -350,6 +359,7 @@ async function buildTranscendFromLeagues() {
     });
     let paginatedAdded = 0;
     let paginatedTotal = 0;
+    const paginatedNeedResolve = [];
     for (const page of globalPageResults) {
         for (const p of page) {
             if (!p || !p.UserID) continue;
@@ -357,16 +367,34 @@ async function buildTranscendFromLeagues() {
             const existing = playerMap.get(p.UserID);
             const pts = p.Points || 0;
             if (!existing || pts > existing.Points) {
+                const displayName = p.DisplayName || resolvedCache[p.UserID] || String(p.UserID);
                 playerMap.set(p.UserID, {
                     UserID: p.UserID,
-                    DisplayName: p.DisplayName || resolvedCache[p.UserID] || String(p.UserID),
+                    DisplayName: displayName,
                     Points: pts,
-                    Clan: p.League || p.LeagueName || '—',
+                    Clan: leagueName(p.League || p.LeagueName),
                 });
-                if (!existing) paginatedAdded++;
+                if (!existing) {
+                    paginatedAdded++;
+                    if (displayName === String(p.UserID) && !resolvedCache[p.UserID]) {
+                        paginatedNeedResolve.push(p.UserID);
+                    }
+                }
             }
         }
     }
+
+    // Resolve display names for players found via paginated endpoint.
+    if (paginatedNeedResolve.length) {
+        const resolved = await resolveUsernames(paginatedNeedResolve);
+        for (const [id, name] of Object.entries(resolved)) {
+            const numId = Number(id);
+            if (playerMap.has(numId)) playerMap.get(numId).DisplayName = name;
+        }
+        Object.assign(resolvedCache, resolved);
+        console.log(`Transcend: resolved ${Object.keys(resolved).length}/${paginatedNeedResolve.length} paginated player names.`);
+    }
+
     globalAdded += paginatedAdded;
     console.log(`Transcend: paginated /leagues/players returned ${paginatedTotal} entries, ${paginatedAdded} new players added.`);
     if (bestEndpointLabel) console.log(`Transcend: best discovery endpoint was "${bestEndpointLabel}".`);
