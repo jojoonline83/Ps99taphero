@@ -458,7 +458,8 @@ async function buildTranscendFromLeagues() {
                     const member = allMembers.find(m => m.UserID === userId);
                     if (member) {
                         const pts = Math.max(contribs[userId] || 0, entry.minPts || 0);
-                        const displayName = member.DisplayName || resolvedCache[userId] || entry.name || String(userId);
+                        const rawName = member.DisplayName && member.DisplayName !== String(userId) ? member.DisplayName : null;
+                        const displayName = rawName || resolvedCache[userId] || entry.name || String(userId);
                         playerMap.set(userId, {
                             UserID: userId,
                             DisplayName: displayName,
