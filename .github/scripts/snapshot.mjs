@@ -17,9 +17,11 @@ const LEAGUE_TOP_PAGES   = 5;
 
 // Extra players to always include in the transcend leaderboard even if their
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
-// fallbackPts is used when the API returns no data (solo players not in any league).
+// fallbackPts is used when the API returns stale or no data.
+// minPts: if the API returns a score LOWER than this, override with minPts (handles API lag).
 const EXTRA_TRACKED_PLAYERS = [
     { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 30 },
+    { userId: 3079452920, name: 'Jojo8', minPts: 37 },
 ];
 
 // Players to always monitor for inactivity (by display name or UserID).
@@ -286,19 +288,72 @@ async function buildTranscendFromLeagues() {
         }
     }
 
-    // Fetch top global individual contributors (includes solo players not in any league).
-    // 25 pages (2500 entries) to capture solo players with lower scores.
-    const globalPlayerPages = Array.from({ length: 25 }, (_, i) => i + 1);
+    // Try multiple endpoints to find ALL Transcend players (including solo players not in any league).
+    const TRANSCEND_ENDPOINTS = [
+        { label: 'leagues/players (paginated)', base: `${API_V1}/leagues/players`, paginated: true },
+        { label: 'transcend/players', url: `${API_V1}/transcend/players` },
+        { label: 'leaderboard/transcend', url: `${API_V1}/leaderboard/transcend` },
+        { label: 'leaderboard/Transcend', url: `${API_V1}/leaderboard/Transcend` },
+        { label: 'events/transcend/leaderboard', url: `${API_V1}/events/transcend/leaderboard` },
+        { label: 'leagues/leaderboard', url: `${API_V1}/leagues/leaderboard` },
+        { label: 'activeLeagueBattle', url: `${API_BASE}/api/activeLeagueBattle` },
+    ];
+
+    let globalAdded = 0;
+    let bestEndpointLabel = '';
+
+    // Try non-paginated endpoints first (might return all players at once).
+    for (const ep of TRANSCEND_ENDPOINTS) {
+        if (ep.paginated) continue;
+        const json = await fetchJson(ep.url, 2);
+        if (!json) { console.log(`  Endpoint ${ep.label}: null`); continue; }
+        const raw = json.data;
+        if (!raw) { console.log(`  Endpoint ${ep.label}: no data field (keys: ${Object.keys(json).join(',')})`); continue; }
+        // Try to extract player array from various response shapes.
+        let players = [];
+        if (Array.isArray(raw)) players = raw;
+        else if (raw.players && Array.isArray(raw.players)) players = raw.players;
+        else if (raw.leaderboard && Array.isArray(raw.leaderboard)) players = raw.leaderboard;
+        else if (raw.data && Array.isArray(raw.data)) players = raw.data;
+
+        if (players.length) {
+            console.log(`  Endpoint ${ep.label}: found ${players.length} entries! Sample: ${JSON.stringify(players[0]).slice(0, 200)}`);
+            let added = 0;
+            for (const p of players) {
+                const userId = p.UserID || p.userId || p.user_id;
+                if (!userId) continue;
+                const pts = p.Points ?? p.points ?? p.Score ?? p.score ?? 0;
+                const existing = playerMap.get(userId);
+                if (!existing || pts > existing.Points) {
+                    playerMap.set(userId, {
+                        UserID: userId,
+                        DisplayName: p.DisplayName || p.displayName || resolvedCache[userId] || String(userId),
+                        Points: pts,
+                        Clan: p.League || p.LeagueName || p.Clan || '—',
+                    });
+                    if (!existing) added++;
+                }
+            }
+            if (added > globalAdded) { globalAdded = added; bestEndpointLabel = ep.label; }
+        } else {
+            console.log(`  Endpoint ${ep.label}: data exists but no player array (type: ${typeof raw}, keys: ${Object.keys(raw).join(',')})`);
+        }
+    }
+
+    // Always run paginated /v1/leagues/players (known to work, covers league members + some solo).
+    const globalPlayerPages = Array.from({ length: 50 }, (_, i) => i + 1);
     const globalPageResults = await mapWithConcurrency(globalPlayerPages, LIST_CONCURRENCY, async page => {
         const json = await fetchJson(`${API_V1}/leagues/players?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
         if (!json?.data) return [];
         const arr = Array.isArray(json.data) ? json.data : (json.data.players || json.data.data || []);
         return Array.isArray(arr) ? arr : [];
     });
-    let globalAdded = 0;
+    let paginatedAdded = 0;
+    let paginatedTotal = 0;
     for (const page of globalPageResults) {
         for (const p of page) {
             if (!p || !p.UserID) continue;
+            paginatedTotal++;
             const existing = playerMap.get(p.UserID);
             const pts = p.Points || 0;
             if (!existing || pts > existing.Points) {
@@ -308,14 +363,17 @@ async function buildTranscendFromLeagues() {
                     Points: pts,
                     Clan: p.League || p.LeagueName || '—',
                 });
-                if (!existing) globalAdded++;
+                if (!existing) paginatedAdded++;
             }
         }
     }
-    if (globalAdded) console.log(`Transcend: added ${globalAdded} player(s) from global top contributors.`);
-    else console.log(`Transcend: global players endpoint returned 0 new players (format debug: page1 type=${typeof globalPageResults[0]}, len=${globalPageResults[0]?.length})`);
+    globalAdded += paginatedAdded;
+    console.log(`Transcend: paginated /leagues/players returned ${paginatedTotal} entries, ${paginatedAdded} new players added.`);
+    if (bestEndpointLabel) console.log(`Transcend: best discovery endpoint was "${bestEndpointLabel}".`);
+    console.log(`Transcend: total ${globalAdded} player(s) added from global endpoints.`);
 
     // Use pre-fetched extra tracked players + fallback for those still missing.
+    // Also enforce minPts for players already in the map (handles API lag).
     const extraFetched = prefetchedExtraPlayers;
     let extraCount = 0;
     let extraFromGlobal = 0;
@@ -323,8 +381,16 @@ async function buildTranscendFromLeagues() {
     for (let i = 0; i < EXTRA_TRACKED_PLAYERS.length; i++) {
         const entry = EXTRA_TRACKED_PLAYERS[i];
         const userId = entry.userId;
-        // Already captured from global paginated fetch or league rosters?
-        if (playerMap.has(userId)) { extraFromGlobal++; continue; }
+
+        // If already captured, enforce minPts floor.
+        if (playerMap.has(userId)) {
+            extraFromGlobal++;
+            if (entry.minPts && playerMap.get(userId).Points < entry.minPts) {
+                console.log(`  Enforcing minPts for ${userId}: API=${playerMap.get(userId).Points} → ${entry.minPts}`);
+                playerMap.get(userId).Points = entry.minPts;
+            }
+            continue;
+        }
         const p = extraFetched[i];
         if (!p || !p.UserID) continue;
         let displayName = p.DisplayName || resolvedCache[p.UserID] || null;
@@ -332,10 +398,11 @@ async function buildTranscendFromLeagues() {
             extraNeedResolve.push(p.UserID);
             displayName = resolvedCache[p.UserID] || String(p.UserID);
         }
+        const pts = Math.max(p.Points || 0, entry.minPts || 0);
         playerMap.set(p.UserID, {
             UserID: p.UserID,
             DisplayName: displayName,
-            Points: p.Points || 0,
+            Points: pts,
             Clan: p.League || p.LeagueName || '—',
         });
         extraCount++;
