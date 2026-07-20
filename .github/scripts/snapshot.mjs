@@ -20,7 +20,7 @@ const LEAGUE_TOP_PAGES   = 5;
 // fallbackPts is used when the API returns stale or no data.
 // minPts: if the API returns a score LOWER than this, override with minPts (handles API lag).
 const EXTRA_TRACKED_PLAYERS = [
-    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 30 },
+    { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 37 },
     { userId: 3079452920, name: 'Jojo8', minPts: 37 },
 ];
 
