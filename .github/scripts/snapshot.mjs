@@ -437,6 +437,26 @@ async function buildTranscendFromLeagues() {
         extraCount++;
     }
 
+    // Cross-check: for players already found, also fetch their league directly to get the
+    // freshest PointContributions score (the /leagues/players/:id endpoint can lag by 1-2 pts).
+    const needCrossCheck = EXTRA_TRACKED_PLAYERS.filter(e => e.leagueName && playerMap.has(e.userId));
+    for (const entry of needCrossCheck) {
+        const leagueJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(entry.leagueName)}`);
+        const detail = leagueJson?.data;
+        if (!detail) continue;
+        const contribs = {};
+        (detail.PointContributions || []).forEach(c => { contribs[c.UserID] = c.Points; });
+        const leaguePts = contribs[entry.userId] || 0;
+        const current = playerMap.get(entry.userId);
+        if (leaguePts > current.Points) {
+            console.log(`  Cross-check ${entry.userId}: league "${entry.leagueName}" has ${leaguePts} pts (was ${current.Points}) — upgrading`);
+            current.Points = leaguePts;
+        }
+        if (!current.Clan || current.Clan === '—') {
+            current.Clan = detail.Name || entry.leagueName;
+        }
+    }
+
     // Secondary fallback: fetch league directly by name, then try alt endpoints, then use fallback.
     const stillMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId));
     if (stillMissing.length) {
