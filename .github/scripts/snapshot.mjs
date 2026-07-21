@@ -411,12 +411,16 @@ async function buildTranscendFromLeagues() {
         const entry = EXTRA_TRACKED_PLAYERS[i];
         const userId = entry.userId;
 
-        // If already captured, enforce minPts floor.
+        // If already captured, enforce minPts floor and fix display name.
         if (playerMap.has(userId)) {
             extraFromGlobal++;
-            if (entry.minPts && playerMap.get(userId).Points < entry.minPts) {
-                console.log(`  Enforcing minPts for ${userId}: API=${playerMap.get(userId).Points} → ${entry.minPts}`);
-                playerMap.get(userId).Points = entry.minPts;
+            const existing = playerMap.get(userId);
+            if (entry.minPts && existing.Points < entry.minPts) {
+                console.log(`  Enforcing minPts for ${userId}: API=${existing.Points} → ${entry.minPts}`);
+                existing.Points = entry.minPts;
+            }
+            if (!existing.DisplayName || existing.DisplayName === String(userId)) {
+                existing.DisplayName = resolvedCache[userId] || entry.name || String(userId);
             }
             continue;
         }
