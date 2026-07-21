@@ -555,14 +555,29 @@ async function buildTranscendFromLeagues() {
     const totalMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId)).length;
     console.log(`Transcend: extra tracked players — ${extraCount} from API, ${extraFromGlobal} from global pages, ${totalMissing} still missing.`);
 
-    const transcendPlayers = [...playerMap.values()]
-        .sort((a, b) => b.Points - a.Points)
-        .slice(0, 5000);
-
+    // Prevent score regression: if an extra tracked player's score dropped vs the previous
+    // snapshot (API outage / rate limit returning fallbackPts), keep the previous score.
     let transcendHistory = [];
     if (existsSync(TRANSCEND_HISTORY_FILE)) {
         try { transcendHistory = JSON.parse(readFileSync(TRANSCEND_HISTORY_FILE, 'utf8')); } catch (_) { transcendHistory = []; }
     }
+    if (transcendHistory.length) {
+        const prevSnap = transcendHistory[transcendHistory.length - 1];
+        for (const entry of EXTRA_TRACKED_PLAYERS) {
+            const cur = playerMap.get(entry.userId);
+            if (!cur) continue;
+            const prev = prevSnap.players?.find(p => p.UserID === entry.userId);
+            if (prev && prev.Points > cur.Points) {
+                console.log(`  Score guard: ${entry.name || entry.userId} would drop ${prev.Points} → ${cur.Points} — keeping ${prev.Points}`);
+                cur.Points = prev.Points;
+            }
+        }
+    }
+
+    const transcendPlayers = [...playerMap.values()]
+        .sort((a, b) => b.Points - a.Points)
+        .slice(0, 5000);
+
     transcendHistory.push({ ts: now, players: transcendPlayers });
     transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
     writeFileSync(TRANSCEND_HISTORY_FILE, JSON.stringify(transcendHistory));
