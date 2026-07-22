@@ -607,28 +607,33 @@ async function buildTranscendFromLeagues() {
         }
     }
 
-    // Final resolve pass: fix any remaining numeric display names.
+    // Sort first, then resolve only the top 1000 display names to keep runtime short.
+    const transcendPlayers = [...playerMap.values()]
+        .sort((a, b) => b.Points - a.Points)
+        .slice(0, 5000);
+
+    // Apply cached names to all players.
+    for (const p of transcendPlayers) {
+        if (resolvedCache[p.UserID]) p.DisplayName = resolvedCache[p.UserID];
+    }
+
+    // Only resolve uncached names for the top 1000 (what's displayed).
     const transcendNeedResolve = [];
-    for (const [uid, p] of playerMap) {
-        if (resolvedCache[uid]) {
-            p.DisplayName = resolvedCache[uid];
-        } else if (!p.DisplayName || p.DisplayName === String(uid)) {
-            transcendNeedResolve.push(uid);
+    for (let i = 0; i < Math.min(1000, transcendPlayers.length); i++) {
+        const p = transcendPlayers[i];
+        if (!p.DisplayName || p.DisplayName === String(p.UserID)) {
+            transcendNeedResolve.push(p.UserID);
         }
     }
     if (transcendNeedResolve.length) {
         const resolved = await resolveUsernames(transcendNeedResolve);
         for (const [id, name] of Object.entries(resolved)) {
-            const entry = playerMap.get(Number(id));
-            if (entry) entry.DisplayName = name;
+            const p = transcendPlayers.find(x => x.UserID === Number(id));
+            if (p) p.DisplayName = name;
         }
         Object.assign(resolvedCache, resolved);
-        console.log(`Transcend: final resolve pass fixed ${Object.keys(resolved).length}/${transcendNeedResolve.length} names.`);
+        console.log(`Transcend: resolved ${Object.keys(resolved).length}/${transcendNeedResolve.length} display names for top 1000.`);
     }
-
-    const transcendPlayers = [...playerMap.values()]
-        .sort((a, b) => b.Points - a.Points)
-        .slice(0, 5000);
 
     transcendHistory.push({ ts: now, players: transcendPlayers });
     transcendHistory = transcendHistory.filter(entry => now - entry.ts <= RETENTION_MS);
@@ -781,14 +786,17 @@ console.log(`Extracted ${totalExtracted} players, keeping top ${players.length}.
 
 // 5. Resolve display names via Roblox API.
 
-const needsResolve = [];
+// Apply cached names to all players.
 players.forEach(p => {
-    if (resolvedCache[p.UserID]) {
-        p.DisplayName = resolvedCache[p.UserID];
-    } else {
-        needsResolve.push(p.UserID);
-    }
+    if (resolvedCache[p.UserID]) p.DisplayName = resolvedCache[p.UserID];
 });
+
+// Only resolve uncached names for the top 1000 (what's displayed).
+const needsResolve = [];
+for (let i = 0; i < Math.min(1000, players.length); i++) {
+    const p = players[i];
+    if (!resolvedCache[p.UserID]) needsResolve.push(p.UserID);
+}
 
 if (needsResolve.length) {
     const resolved = await resolveUsernames(needsResolve);
