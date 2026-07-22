@@ -25,6 +25,9 @@ const EXTRA_TRACKED_PLAYERS = [
     { userId: 3079452920, name: 'Jojo8', minPts: 37 },
 ];
 
+// Extra leagues to always fetch (covers players in small leagues outside top 500).
+const EXTRA_LEAGUES = ['woot'];
+
 // Players to always monitor for inactivity (by display name or UserID).
 const MONITOR_PLAYER_NAMES = ['jojo8', 'javierplayz'];
 
@@ -586,6 +589,34 @@ async function buildTranscendFromLeagues() {
     }
     const totalMissing = EXTRA_TRACKED_PLAYERS.filter(e => !playerMap.has(e.userId)).length;
     console.log(`Transcend: extra tracked players — ${extraCount} from API, ${extraFromGlobal} from global pages, ${totalMissing} still missing.`);
+
+    // Fetch extra leagues and add all their members.
+    for (const leagueName of EXTRA_LEAGUES) {
+        const leagueJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(leagueName)}`);
+        const detail = leagueJson?.data;
+        if (!detail) { console.log(`  Extra league "${leagueName}": not found`); continue; }
+        const contribs = {};
+        (detail.PointContributions || []).forEach(c => { contribs[c.UserID] = c.Points; });
+        const allMembers = [];
+        if (detail.Owner?.UserID) allMembers.push(detail.Owner);
+        (detail.Members || []).forEach(m => allMembers.push(m));
+        let added = 0;
+        for (const m of allMembers) {
+            if (!m.UserID) continue;
+            const pts = contribs[m.UserID] || 0;
+            const existing = playerMap.get(m.UserID);
+            if (existing) {
+                if (pts > existing.Points) existing.Points = pts;
+                if (!existing.Clan || existing.Clan === '—') existing.Clan = detail.Name;
+                continue;
+            }
+            const rawName = m.DisplayName && m.DisplayName !== String(m.UserID) ? m.DisplayName : null;
+            const name = rawName || resolvedCache[m.UserID] || String(m.UserID);
+            playerMap.set(m.UserID, { UserID: m.UserID, DisplayName: name, Points: pts, Clan: detail.Name });
+            added++;
+        }
+        console.log(`  Extra league "${leagueName}": ${allMembers.length} members, ${added} new players added.`);
+    }
 
     // Prevent score regression: if an extra tracked player's score dropped vs the previous
     // snapshot (API outage / rate limit returning fallbackPts), keep the previous score.
