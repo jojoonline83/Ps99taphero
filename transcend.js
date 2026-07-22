@@ -194,7 +194,7 @@ function renderPlayerDetail(userId) {
         const entry = snap.players?.find(p => p.UserID === userId);
         if (!entry) continue;
         const prev = i > 0 ? historyData[i - 1].players?.find(p => p.UserID === userId) : null;
-        const change = prev ? entry.Points - prev.Points : null;
+        const change = prev ? entry.Points - prev.Points : 0;
         rows.push({ ts: snap.ts, points: entry.Points, change });
     }
 
