@@ -13,7 +13,7 @@ const PAGE_SIZE          = 100;
 const LIST_CONCURRENCY   = 10;
 const DETAIL_CONCURRENCY = 20;
 const MAX_PLAYERS        = 5000;
-const LEAGUE_TOP_PAGES   = 5;
+const LEAGUE_TOP_PAGES   = 15;
 
 // Extra players to always include in the transcend leaderboard even if their
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
