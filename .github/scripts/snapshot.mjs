@@ -23,7 +23,6 @@ const MAX_PLAYERS        = 5000;
 const EXTRA_TRACKED_PLAYERS = [
     { userId: 3543344398, name: 'JavierPlayz', fallbackPts: 38, leagueName: 'jj02' },
     { userId: 3079452920, name: 'Jojo8', minPts: 37 },
-    { userId: 3216414750, name: 'xolox', leagueName: 'woot' },
 ];
 
 // Players to always monitor for inactivity (by display name or UserID).
