@@ -31,19 +31,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          other_ids=$(gh run list --repo "${{ github.repository }}" --workflow snapshot.yml --status in_progress --json databaseId --jq '.[].databaseId' | grep -v "^${{ github.run_id }}$" || true)
+          cutoff=$(date -u -d '15 minutes ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-15M '+%Y-%m-%dT%H:%M:%SZ')
+          other_runs=$(gh run list --repo "${{ github.repository }}" --workflow snapshot.yml --status in_progress --json databaseId,createdAt --jq '.[]' | grep -v "\"databaseId\":${{ github.run_id }}" || true)
           proceed=true
-          for id in $other_ids; do
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            id=$(echo "$line" | grep -o '"databaseId":[0-9]*' | grep -o '[0-9]*')
+            created=$(echo "$line" | grep -o '"createdAt":"[^"]*"' | cut -d'"' -f4)
+            [ -z "$id" ] && continue
             if [ "$id" -lt "${{ github.run_id }}" ]; then
-              proceed=false
+              if [[ "$created" > "$cutoff" ]]; then
+                proceed=false
+                echo "Older run $id (started $created) is still active — skipping."
+              else
+                echo "Ignoring stale run $id (started $created, older than 15m)."
+              fi
             fi
-          done
-          if [ "$proceed" = "true" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "An older snapshot run is still in progress — skipping this dispatch."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          fi
+          done <<< "$other_runs"
+          echo "proceed=$proceed" >> "$GITHUB_OUTPUT"
 
       - name: Record and push snapshot (retries on conflict)
         if: steps.guard.outputs.proceed == 'true'
