@@ -185,9 +185,9 @@ console.log(`Pre-fetched ${prefetchedExtraPlayers.filter(Boolean).length}/${EXTR
 
 // 0b. League + Transcend snapshot — run BEFORE heavy tap hero fetch to avoid rate limits.
 async function snapshotLeagues() {
-    // Fetch top leagues sorted by points. 3000 leagues is enough to capture all
-    // top 1000 individual players — the paginated /leagues/players endpoint covers the rest.
-    const LEAGUE_PAGE_CAP = 30;
+    // Fetch top leagues sorted by points. 1000 leagues covers top players;
+    // the paginated /leagues/players endpoint (5000 entries) covers the rest.
+    const LEAGUE_PAGE_CAP = 10;
     const leagueSummaries = [];
     const BATCH_SIZE = 10;
     let page = 1;
