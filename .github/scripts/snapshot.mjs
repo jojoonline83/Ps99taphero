@@ -13,7 +13,7 @@ const PAGE_SIZE          = 100;
 const LIST_CONCURRENCY   = 10;
 const DETAIL_CONCURRENCY = 20;
 const MAX_PLAYERS        = 5000;
-const LEAGUE_TOP_PAGES   = 15;
+// League pages are now fetched dynamically until empty (no fixed limit).
 
 // Extra players to always include in the transcend leaderboard even if their
 // league is outside the top 500.  Fetched individually via /v1/leagues/players/:userId.
@@ -186,12 +186,26 @@ console.log(`Pre-fetched ${prefetchedExtraPlayers.filter(Boolean).length}/${EXTR
 
 // 0b. League + Transcend snapshot — run BEFORE heavy tap hero fetch to avoid rate limits.
 async function snapshotLeagues() {
-    const leaguePageNums = Array.from({ length: LEAGUE_TOP_PAGES }, (_, i) => i + 1);
-    const leaguePageResults = await mapWithConcurrency(leaguePageNums, LIST_CONCURRENCY, async page => {
-        const json = await fetchJson(`${API_V1}/leagues?page=${page}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
-        return json?.data?.leagues || [];
-    });
-    const leagueSummaries = leaguePageResults.flat();
+    // Fetch ALL league pages until we get an empty response.
+    // This ensures every league (and every player) is captured regardless of league size.
+    const leagueSummaries = [];
+    const BATCH_SIZE = 10;
+    let page = 1;
+    let done = false;
+    while (!done) {
+        const batchPages = Array.from({ length: BATCH_SIZE }, (_, i) => page + i);
+        const batchResults = await mapWithConcurrency(batchPages, LIST_CONCURRENCY, async p => {
+            const json = await fetchJson(`${API_V1}/leagues?page=${p}&pageSize=${PAGE_SIZE}&sort=Points&sortOrder=desc`);
+            return json?.data?.leagues || [];
+        });
+        for (const pageResult of batchResults) {
+            if (!pageResult.length) { done = true; break; }
+            leagueSummaries.push(...pageResult);
+        }
+        page += BATCH_SIZE;
+        if (page > 200) break; // safety cap
+    }
+    console.log(`Fetched ${leagueSummaries.length} league summaries (${page - 1} pages scanned).`);
     if (!leagueSummaries.length) {
         console.log('League snapshot: no league data returned — skipping.');
         return;
