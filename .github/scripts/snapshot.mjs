@@ -606,6 +606,25 @@ async function buildTranscendFromLeagues() {
         }
     }
 
+    // Final resolve pass: fix any remaining numeric display names.
+    const transcendNeedResolve = [];
+    for (const [uid, p] of playerMap) {
+        if (resolvedCache[uid]) {
+            p.DisplayName = resolvedCache[uid];
+        } else if (!p.DisplayName || p.DisplayName === String(uid)) {
+            transcendNeedResolve.push(uid);
+        }
+    }
+    if (transcendNeedResolve.length) {
+        const resolved = await resolveUsernames(transcendNeedResolve);
+        for (const [id, name] of Object.entries(resolved)) {
+            const entry = playerMap.get(Number(id));
+            if (entry) entry.DisplayName = name;
+        }
+        Object.assign(resolvedCache, resolved);
+        console.log(`Transcend: final resolve pass fixed ${Object.keys(resolved).length}/${transcendNeedResolve.length} names.`);
+    }
+
     const transcendPlayers = [...playerMap.values()]
         .sort((a, b) => b.Points - a.Points)
         .slice(0, 5000);
