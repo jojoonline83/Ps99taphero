@@ -460,6 +460,20 @@ async function buildTranscendFromLeagues() {
         if (!current.Clan || current.Clan === '—') {
             current.Clan = detail.Name || entry.leagueName;
         }
+        // Also add ALL other members from this league (covers teammates not in top league pages).
+        const allMembers = [];
+        if (detail.Owner?.UserID) allMembers.push(detail.Owner);
+        (detail.Members || []).forEach(m => allMembers.push(m));
+        let leagueMatesAdded = 0;
+        for (const m of allMembers) {
+            if (!m.UserID || playerMap.has(m.UserID)) continue;
+            const mPts = contribs[m.UserID] || 0;
+            const rawName = m.DisplayName && m.DisplayName !== String(m.UserID) ? m.DisplayName : null;
+            const mName = rawName || resolvedCache[m.UserID] || String(m.UserID);
+            playerMap.set(m.UserID, { UserID: m.UserID, DisplayName: mName, Points: mPts, Clan: detail.Name || entry.leagueName });
+            leagueMatesAdded++;
+        }
+        if (leagueMatesAdded) console.log(`  Cross-check: added ${leagueMatesAdded} teammate(s) from league "${entry.leagueName}"`);
     }
 
     // Secondary fallback: fetch league directly by name, then try alt endpoints, then use fallback.
@@ -481,17 +495,17 @@ async function buildTranscendFromLeagues() {
                     if (detail.Owner?.UserID) allMembers.push(detail.Owner);
                     (detail.Members || []).forEach(m => allMembers.push(m));
                     const member = allMembers.find(m => m.UserID === userId);
-                    if (member) {
-                        const pts = Math.max(contribs[userId] || 0, entry.minPts || 0);
-                        const rawName = member.DisplayName && member.DisplayName !== String(userId) ? member.DisplayName : null;
-                        const displayName = rawName || resolvedCache[userId] || entry.name || String(userId);
-                        playerMap.set(userId, {
-                            UserID: userId,
-                            DisplayName: displayName,
-                            Points: pts,
-                            Clan: detail.Name || entry.leagueName,
-                        });
-                        console.log(`  Found ${userId} via direct league "${entry.leagueName}": ${displayName}, ${pts} pts`);
+                    // Add ALL members from this league (not just the tracked player).
+                    for (const m of allMembers) {
+                        if (playerMap.has(m.UserID)) continue;
+                        const mPts = m.UserID === userId ? Math.max(contribs[m.UserID] || 0, entry.minPts || 0) : (contribs[m.UserID] || 0);
+                        const rawName = m.DisplayName && m.DisplayName !== String(m.UserID) ? m.DisplayName : null;
+                        const mName = rawName || resolvedCache[m.UserID] || (m.UserID === userId ? entry.name : null) || String(m.UserID);
+                        playerMap.set(m.UserID, { UserID: m.UserID, DisplayName: mName, Points: mPts, Clan: detail.Name || entry.leagueName });
+                    }
+                    if (playerMap.has(userId)) {
+                        const added = playerMap.get(userId);
+                        console.log(`  Found ${userId} via direct league "${entry.leagueName}": ${added.DisplayName}, ${added.Points} pts (+ ${allMembers.length - 1} teammates)`);
                         found = true;
                         extraCount++;
                     } else {
