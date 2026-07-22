@@ -13,6 +13,7 @@ const PALETTE = [
 
 let historyData = [];
 let state = { mode: 'top', searchResults: [], total: 0, colorByName: {}, nextColorIdx: 0 };
+const DISPLAY_LIMIT = 1000;
 let ui = { currentLeagueName: null, currentLeagueDetail: null, currentRank: undefined, livePointsAsOf: undefined };
 let overallTotalCache = 0;
 
@@ -44,7 +45,8 @@ function colorFor(name) {
 
 function latestSnapshot() { return historyData.length ? historyData[historyData.length - 1] : null; }
 function topLeagues() { return latestSnapshot()?.leagues || []; }
-function rankedLeagues() { return topLeagues().filter(l => !l.Extra); }
+function allLeagues() { return topLeagues().filter(l => !l.Extra); }
+function rankedLeagues() { return allLeagues().slice(0, DISPLAY_LIMIT); }
 function displayedLeagues() { return state.mode === 'search' ? state.searchResults : rankedLeagues(); }
 
 let toastTimer = null;
