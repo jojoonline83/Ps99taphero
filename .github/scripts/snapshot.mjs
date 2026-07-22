@@ -213,13 +213,13 @@ async function snapshotLeagues() {
         return;
     }
 
-    const leagueDetails = await mapWithConcurrency(leagueSummaries, DETAIL_CONCURRENCY, async summary => {
+    async function fetchLeagueDetail(summary) {
         const detailJson = await fetchJson(`${API_V1}/leagues/${encodeURIComponent(summary.Name)}`);
         const detail = detailJson?.data;
         if (!detail) {
             return {
                 ID: summary.ID, Name: summary.Name, Points: summary.Points,
-                Members: summary.Members, MemberCapacity: summary.MemberCapacity, roster: [],
+                Members: summary.Members, MemberCapacity: summary.MemberCapacity, roster: [], _failed: true,
             };
         }
         const contribByUser = {};
@@ -242,7 +242,25 @@ async function snapshotLeagues() {
             Members: roster.length, MemberCapacity: detail.MemberCapacity,
             Level: detail.Level, roster,
         };
-    });
+    }
+
+    let leagueDetails = await mapWithConcurrency(leagueSummaries, 10, fetchLeagueDetail);
+
+    // Retry failed leagues at lower concurrency.
+    const failedIdxs = leagueDetails.map((l, i) => l._failed ? i : -1).filter(i => i >= 0);
+    if (failedIdxs.length) {
+        console.log(`League details: ${failedIdxs.length}/${leagueDetails.length} failed — retrying at lower concurrency...`);
+        await new Promise(r => setTimeout(r, 2000));
+        const retryResults = await mapWithConcurrency(failedIdxs, 5, async idx => {
+            return { idx, result: await fetchLeagueDetail(leagueSummaries[idx]) };
+        });
+        let fixed = 0;
+        for (const { idx, result } of retryResults) {
+            if (!result._failed) { leagueDetails[idx] = result; fixed++; }
+        }
+        console.log(`League details: retry fixed ${fixed}/${failedIdxs.length}.`);
+    }
+    leagueDetails.forEach(l => delete l._failed);
 
     const leagueNeedsResolve = [];
     leagueDetails.forEach(l => l.roster.forEach(p => {
