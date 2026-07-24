@@ -7,8 +7,9 @@ on:
         description: 'Send a one-off test Discord alert and exit (skips the actual snapshot)'
         type: boolean
         default: false
-  schedule:
-    - cron: '*/10 * * * *'
+  # schedule disabled — league is over
+  # schedule:
+  #   - cron: '*/10 * * * *'
 
 permissions:
   contents: write
