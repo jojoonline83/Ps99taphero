@@ -1,0 +1,16 @@
+name: Relay Snapshot Dispatch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Ps99petsvscoins snapshot
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/jojoonline83/Ps99petsvscoins/actions/workflows/snapshot.yml/dispatches \
+            -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}'
