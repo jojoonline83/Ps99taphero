@@ -33,7 +33,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cutoff=$(date -u -d '15 minutes ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-15M '+%Y-%m-%dT%H:%M:%SZ')
-          other_runs=$(gh run list --repo "${{ github.repository }}" --workflow snapshot.yml --status in_progress --json databaseId,createdAt --jq '.[]' | grep -v "\"databaseId\":${{ github.run_id }}" || true)
+          other_runs=$(gh run list --repo "${{ github.repository }}" --workflow snapshot-taphero.yml --status in_progress --json databaseId,createdAt --jq '.[]' | grep -v "\"databaseId\":${{ github.run_id }}" || true)
           proceed=true
           while IFS= read -r line; do
             [ -z "$line" ] && continue
