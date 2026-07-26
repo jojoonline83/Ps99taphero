@@ -2,6 +2,11 @@ name: Relay Snapshot Dispatch
 
 on:
   workflow_dispatch:
+    inputs:
+      test_discord_alert:
+        description: 'Send a test Discord alert and exit (skips snapshot + inactivity check)'
+        type: boolean
+        default: false
 
 jobs:
   relay:
@@ -10,7 +15,26 @@ jobs:
       - name: Checkout (for alert state persistence)
         uses: actions/checkout@v4
 
+      - name: Test Discord alert
+        if: inputs.test_discord_alert == true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          node --input-type=module <<'SCRIPT'
+          const urls = (process.env.DISCORD_WEBHOOK_URL || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (!urls.length) { console.log('No DISCORD_WEBHOOK_URL configured.'); process.exit(1); }
+          for (const url of urls) {
+              const res = await fetch(url, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ content: '✅ Test alert from PS99 Clan Battle relay — Discord notifications are working correctly.' }),
+              });
+              console.log(`Webhook responded: ${res.status}`);
+          }
+          SCRIPT
+
       - name: Trigger Ps99petsvscoins snapshot
+        if: inputs.test_discord_alert != true
         run: |
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
@@ -19,9 +43,11 @@ jobs:
             -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}'
 
       - name: Wait for snapshot to publish
+        if: inputs.test_discord_alert != true
         run: sleep 90
 
       - name: Check inactivity and alert Discord
+        if: inputs.test_discord_alert != true
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -137,6 +163,7 @@ jobs:
           SCRIPT
 
       - name: Persist alert state
+        if: inputs.test_discord_alert != true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
