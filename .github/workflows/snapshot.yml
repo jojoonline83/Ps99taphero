@@ -7,10 +7,10 @@ jobs:
   relay:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Ps99petsvscoins snapshot
+      - name: Trigger Ps99petsvscoins league snapshot
         run: |
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99petsvscoins/actions/workflows/snapshot.yml/dispatches \
+            https://api.github.com/repos/jojoonline83/Ps99petsvscoins/actions/workflows/league_snapshot.yml/dispatches \
             -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}'
