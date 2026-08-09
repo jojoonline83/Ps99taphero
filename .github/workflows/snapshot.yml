@@ -21,4 +21,4 @@ jobs:
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/jojoonline83/Ps99pinata/actions/workflows/snapshot.yml/dispatches \
-            -d '{"ref":"claude/ps99-pinata-leaderboard-8ihk03"}'
+            -d '{"ref":"main"}'
