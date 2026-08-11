@@ -11,8 +11,16 @@ jobs:
     steps:
       - name: Trigger Ps99petsvscoins league snapshot
         run: |
-          curl -s -X POST \
+          curl -sf -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/jojoonline83/Ps99petsvscoins/actions/workflows/league_snapshot.yml/dispatches \
-            -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}'
+            -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}' || echo "Ps99petsvscoins dispatch failed"
+
+      - name: Trigger Ps99pinata clan battle snapshot
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/jojoonline83/Ps99pinata/actions/workflows/snapshot.yml/dispatches \
+            -d '{"ref":"main"}' || echo "Ps99pinata dispatch failed"
