@@ -98,3 +98,14 @@ jobs:
       - name: Deploy to GitHub Pages (retry 1)
         if: steps.guard.outputs.proceed == 'true' && steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
+
+      - name: Relay to Ps99clanbattle
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then
+            gh workflow run snapshot-taphero.yml --repo jojoonline83/Ps99clanbattle || echo "Relay dispatch failed (non-fatal)"
+          else
+            echo "No GH_PAT secret — skipping relay"
+          fi
