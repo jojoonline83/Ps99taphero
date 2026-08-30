@@ -30,3 +30,11 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot.yml/dispatches \
             -d '{"ref":"gh-pages"}' || echo "Lucky Blox dispatch failed"
+
+      - name: Trigger Lucky Block Part 2 league snapshot
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-taphero.yml/dispatches \
+            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Lucky Block Part 2 dispatch failed"
