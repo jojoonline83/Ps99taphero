@@ -46,3 +46,11 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-pinata.yml/dispatches \
             -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Pinata Party dispatch failed"
+
+      - name: Trigger Cyberpunk Battle clan battle snapshot
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-cyberpunk.yml/dispatches \
+            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Cyberpunk Battle dispatch failed"
