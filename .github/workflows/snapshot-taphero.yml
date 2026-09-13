@@ -7,9 +7,8 @@ on:
         description: 'Send a one-off test Discord alert and exit (skips the actual snapshot)'
         type: boolean
         default: false
-  # schedule disabled — league is over
-  # schedule:
-  #   - cron: '*/10 * * * *'
+  schedule:
+    - cron: '*/10 * * * *'
 
 permissions:
   contents: write
@@ -74,6 +73,13 @@ jobs:
           done
           echo "::error::Failed to push snapshot after 5 attempts"
           exit 1
+
+      - name: Relay dispatch to Ps99clanbattle
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run snapshot-taphero.yml --repo jojoonline83/Ps99clanbattle --ref claude/ps99-clan-battle-tracker-5N9NW || echo "Relay dispatch failed (non-fatal)"
 
       - name: Setup Pages
         if: steps.guard.outputs.proceed == 'true'
