@@ -7,50 +7,10 @@ jobs:
   relay:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Ps99petsvscoins league snapshot
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99petsvscoins/actions/workflows/league_snapshot.yml/dispatches \
-            -d '{"ref":"claude/clan-battle-leaderboard-ghchnh"}' || echo "Ps99petsvscoins dispatch failed"
-
-      - name: Trigger Ps99pinata clan battle snapshot
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99pinata/actions/workflows/snapshot.yml/dispatches \
-            -d '{"ref":"main"}' || echo "Ps99pinata dispatch failed"
-
-      - name: Trigger Lucky Blox clan battle snapshot
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot.yml/dispatches \
-            -d '{"ref":"gh-pages"}' || echo "Lucky Blox dispatch failed"
-
-      - name: Trigger Lucky Block Part 2 league snapshot
+      - name: Trigger League snapshot
         run: |
           curl -sf -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-taphero.yml/dispatches \
-            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Lucky Block Part 2 dispatch failed"
-
-      - name: Trigger Pinata Party clan battle snapshot
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-pinata.yml/dispatches \
-            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Pinata Party dispatch failed"
-
-      - name: Trigger Cyberpunk Battle clan battle snapshot
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/jojoonline83/Ps99clanbattle/actions/workflows/snapshot-cyberpunk.yml/dispatches \
-            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "Cyberpunk Battle dispatch failed"
+            -d '{"ref":"claude/ps99-clan-battle-tracker-5N9NW"}' || echo "League dispatch failed"
